@@ -188,6 +188,23 @@ body {
   border-radius:7px; padding:11px 14px; color:var(--accent); }
 .dedup-text { font-size:.79rem; line-height:1.55; color:var(--ink-2); }
 
+/* ---------- panneau d'options ---------- */
+.optpanel { overflow:hidden; }
+.optpanel-head { padding:12px 18px; cursor:pointer; user-select:none;
+  transition:background .2s; }
+.optpanel-head:hover { background:var(--accent-soft); }
+.optpanel-title { font-family:'IBM Plex Mono',monospace; font-size:.68rem;
+  letter-spacing:.2em; text-transform:uppercase; font-weight:500; }
+.optpanel-body { border-top:1px solid var(--line); padding:16px 18px;
+  background:#FCFCFA; gap:0; }
+.optrow { padding:11px 0; border-bottom:1px dashed var(--line); }
+.optrow:last-child { border-bottom:none; }
+.optname { font-size:.85rem; font-weight:500; }
+.optexamples { font-size:.74rem; color:var(--ink-2); }
+.optselect { min-width:132px; }
+.optselect .q-field__control { font-family:'IBM Plex Mono',monospace;
+  font-size:.75rem; background:var(--card); }
+
 /* ---------- comparaison avant / après ---------- */
 .difflegend { padding:4px 0 10px 0; border-bottom:1px solid var(--line);
   margin-bottom:10px; }
@@ -208,6 +225,12 @@ body {
 .diffside-after .diffvalue { color:var(--fraud); font-weight:500; }
 .diffvalue-empty { color:var(--na) !important; font-style:italic; font-weight:400 !important; }
 .diffarrow { align-self:center; color:var(--na); font-size:1rem; }
+/* Recoupements : la couleur du panneau droit suit le résultat du contrôle. */
+.checkside-ok    { background:var(--ok-soft);    border:1px solid rgba(27,122,76,.28); }
+.checkside-fraud { background:var(--fraud-soft); border:1px solid rgba(176,42,33,.28); }
+.checkside-na    { background:#F6F5F0;           border:1px solid var(--line); }
+.checkvalue-ok    { color:var(--ok);    font-weight:500; }
+.checkvalue-fraud { color:var(--fraud); font-weight:500; }
 .diffhint { font-size:.73rem; line-height:1.5; color:var(--ink-2); font-style:italic;
   padding-left:2px; }
 @media (max-width:640px) {

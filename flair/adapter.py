@@ -20,7 +20,10 @@ d'anomalie inconnu est affiché quand même (en orange), jamais ignoré.
 
 from __future__ import annotations
 
-from .model import DiffRow, Layer, MetaRow, Report, Severity, Signal, State
+import re
+
+from .model import CheckRow, DiffRow, Layer, MetaRow, Report, Severity, Signal, State
+from .policy import FAMILY_BY_KEY, classify, default_policy
 
 # Libellés métier des champs renvoyés dans `changed_fields`.
 FIELD_LABELS = {
@@ -124,12 +127,8 @@ def _build_diffs(changed_fields) -> list[DiffRow]:
 # Réglages métier — seuils, pondérations et traductions vivent ici.
 # --------------------------------------------------------------------------
 
-# Logiciels dont la présence sur un document administratif est un signal fort.
-GRAPHIC_EDITORS = (
-    "photoshop", "gimp", "illustrator", "inkscape", "canva", "affinity",
-    "pixelmator", "krita", "paint.net", "figma", "acrobat pro", "pdfelement",
-    "foxit phantom", "nitro pro", "ilovepdf", "smallpdf",
-)
+# Le catalogue des logiciels et leur niveau de risque vit dans flair/policy.py,
+# pour être réglable depuis le panneau d'options de la démo.
 
 # Pondération de chaque couche API dans le score global (0-1).
 LAYER_WEIGHTS = {
@@ -183,6 +182,19 @@ ANOMALIES: dict[str, tuple[State, Severity, str, str]] = {
         State.SUSPECT, Severity.MEDIUM,
         "Le fichier a été enregistré plusieurs fois après sa création",
         "Chaque ré-enregistrement laisse une trace dans la structure du PDF.",
+    ),
+    "c2pa_manifest": (
+        State.FRAUD, Severity.HIGH,
+        "Manifeste C2PA détecté — le fichier déclare avoir été généré par IA",
+        "Le C2PA est une signature que les générateurs d'images apposent "
+        "eux-mêmes. Ce n'est pas une estimation statistique : c'est le fichier "
+        "qui déclare son origine.",
+    ),
+    "ai_generation_signature": (
+        State.FRAUD, Severity.HIGH,
+        "Signature de génération par IA trouvée dans le fichier",
+        "Des traces laissées par un modèle génératif subsistent dans les "
+        "données internes du document.",
     ),
     "duplicate_objects": (
         State.SUSPECT, Severity.MEDIUM,
@@ -423,18 +435,43 @@ def _build_history(api: dict, file_type: str) -> Layer:
     signals.append(versions)
 
     # --- Bloc 2 : modifications de contenu ----------------------------------
-    diffs = _build_diffs(changed_fields)
+    # Une modification n'est retenue que si le moteur a fourni les DEUX valeurs.
+    # Sans valeur d'origine, on ne peut pas parler de modification avérée : on
+    # les compte sans les afficher ni les compter comme alerte.
+    tous_diffs = _build_diffs(changed_fields)
+    diffs = [d for d in tous_diffs if d.before and d.after]
+    incompletes = len(tous_diffs) - len(diffs)
+
     if diffs:
         consumed.add("text_content_changed")
         graves = sum(1 for d in diffs if d.state == State.FRAUD)
         champs = sorted({d.field_label for d in diffs})
+        puces = [f"Champs touchés : {', '.join(champs)}."] if champs else []
+        if incompletes:
+            puces.append(
+                f"{incompletes} autre(s) modification(s) signalée(s) sans valeur "
+                "d'origine exploitable — non retenues."
+            )
         modifs = Signal(
             title="MODIFICATIONS DE CONTENU",
             state=State.FRAUD if graves else State.SUSPECT,
             severity=Severity.HIGH if graves else Severity.MEDIUM,
-            verdict=(f"{len(diffs)} modification(s) de contenu"
+            verdict=(f"{len(diffs)} modification(s) de contenu avérée(s)"
                      + (f", dont {graves} de sévérité élevée" if graves else "")),
-            bullets=[f"Champs touchés : {', '.join(champs)}."] if champs else [],
+            bullets=puces,
+        )
+    elif incompletes:
+        consumed.add("text_content_changed")
+        modifs = Signal(
+            title="MODIFICATIONS DE CONTENU",
+            state=State.NA,
+            severity=Severity.NA,
+            verdict=f"{incompletes} modification(s) signalée(s), aucune exploitable",
+            bullets=[
+                "Le moteur n'a renvoyé aucune valeur d'origine à comparer. "
+                "Sans point de comparaison, aucune modification ne peut être "
+                "considérée comme avérée.",
+            ],
         )
     elif "text_content_changed" in codes:
         state, severity, phrase, explication = _anomaly("text_content_changed")
@@ -469,7 +506,8 @@ def _build_history(api: dict, file_type: str) -> Layer:
             verdict="Aucun historique de contenu à comparer sur ce document",
         )
     modifs.details = [
-        ("Modifications détaillées", str(len(diffs)) if diffs else "non détaillées par l'API"),
+        ("Modifications avérées", str(len(diffs))),
+        ("Signalées sans valeur d'origine", str(incompletes)),
         ("Rattachement aux versions", "non fourni par l'API — les modifications "
                                       "ne sont pas datées par version"),
     ]
@@ -515,29 +553,20 @@ def _pdf_digits(value) -> str:
     return "".join(c for c in str(value or "") if c.isdigit())[:14]
 
 
-def _is_graphic_tool(value) -> bool:
-    return bool(value) and any(e in str(value).lower() for e in GRAPHIC_EDITORS)
+def _tool_row(label: str, value, policy) -> MetaRow:
+    """Ligne « logiciel », classée selon la politique de risque configurée.
 
-
-def _tool_row(label: str, value, *, risky: bool, unknown: bool) -> MetaRow:
-    """Ligne « logiciel ». `risky` n'est vrai que pour l'outil réellement fautif."""
+    Un éditeur simplement non reconnu n'est jamais signalé : la liste des
+    logiciels légitimes est par nature incomplète, et chaque oubli produisait
+    une alerte sur un document authentique.
+    """
     if not value:
         return MetaRow(label, "absent", State.NA)
-    if risky:
-        return MetaRow(
-            label, str(value), State.FRAUD,
-            "Logiciel de retouche graphique sur un document administratif — "
-            "un document officiel est produit par un système de gestion.",
-        )
-    if unknown:
-        return MetaRow(
-            label, str(value), State.SUSPECT,
-            "Éditeur non reconnu parmi les émetteurs légitimes connus du moteur.",
-        )
-    return MetaRow(label, str(value), State.OK)
+    etat, note = classify(value, policy)
+    return MetaRow(label, str(value), etat, note)
 
 
-def _build_metadata(api: dict, file_type: str) -> Layer:
+def _build_metadata(api: dict, file_type: str, policy=None) -> Layer:
     """Couche 2 — affichée sous forme de tableau catégorie / information / risque."""
     raw = api.get("metadata") or {}
     meta = ((raw.get("signals") or {}).get("metadata")) or {}
@@ -546,184 +575,53 @@ def _build_metadata(api: dict, file_type: str) -> Layer:
     # Deux formes possibles selon le type de document.
     creation = meta.get("creation") or {}      # PDF
     doc_info = meta.get("document") or {}      # PDF
-    security = meta.get("security") or {}      # PDF
     capture = meta.get("capture") or {}        # image
     editing = meta.get("editing") or {}        # image
-    technical = meta.get("technical") or {}    # image
 
-    hidden = api.get("hidden_content") or {}
-    hidden_codes = _anomaly_codes(hidden)
-    fonts = (((api.get("revision_history") or {}).get("signals") or {})
-             .get("revision_history") or {}).get("fonts") or {}
-
-    rows: list[MetaRow] = []
-    consumed: set[str] = set()
-
-    # ---------------- Logiciels ----------------
-    producer = creation.get("producer") or editing.get("software")
     creator = creation.get("creator")
-    prod_risky = _is_graphic_tool(producer)
-    crea_risky = _is_graphic_tool(creator)
-    # Le moteur signale un outil à risque sans dire lequel : on l'impute au
-    # producteur, qui est le champ écrit en dernier par le logiciel d'édition.
-    if "high_risk_tool" in codes:
-        consumed.add("high_risk_tool")
-        if not (prod_risky or crea_risky):
-            prod_risky = True
+    # Le « producteur » est réécrit par le dernier logiciel ayant touché le
+    # fichier : c'est là qu'une retouche se voit, d'où le libellé « modification ».
+    producer = creation.get("producer") or editing.get("software")
 
-    unknown = "unknown_producer" in codes
-    if unknown:
-        consumed.add("unknown_producer")
+    ligne_creation = _tool_row("Logiciel de création", creator, policy)
+    ligne_modif = _tool_row("Logiciel de modification", producer, policy)
 
-    rows.append(_tool_row("Logiciel de production", producer,
-                          risky=prod_risky, unknown=unknown and not prod_risky))
-    rows.append(_tool_row("Logiciel de création", creator,
-                          risky=crea_risky, unknown=False))
+    # Le moteur signale un outil à risque sans dire lequel. Si aucune famille
+    # surveillée ne reconnaît les logiciels déclarés, on impute l'alerte au
+    # logiciel de modification, au niveau réglé pour la retouche graphique.
+    if "high_risk_tool" in codes and State.FRAUD not in (
+        ligne_creation.state, ligne_modif.state
+    ):
+        famille = FAMILY_BY_KEY["retouche"]
+        niveau = (policy or default_policy()).get("retouche", famille.default)
+        if niveau != State.NA and producer:
+            ligne_modif = MetaRow(
+                "Logiciel de modification", str(producer), niveau, famille.note
+            )
 
-    # ---------------- Dates ----------------
     created_raw = creation.get("created_at")
     modified_raw = creation.get("modified_at") or capture.get("capture_date")
-    created, modified = _pdf_digits(created_raw), _pdf_digits(modified_raw)
 
-    rows.append(MetaRow(
-        "Date de création",
-        _pdf_date(created_raw) if created_raw else "absente",
-        State.OK if created_raw else State.NA,
-    ))
+    rows: list[MetaRow] = [
+        ligne_creation,
+        ligne_modif,
+        MetaRow(
+            "Date de création",
+            _pdf_date(created_raw) if created_raw else "absente",
+            State.OK if created_raw else State.NA,
+        ),
+        # Une date de modification sans date de création n'est pas suspecte :
+        # les métadonnées d'origine ont pu être simplement écrasées.
+        MetaRow(
+            "Date de modification",
+            _pdf_date(modified_raw) if modified_raw else "absente",
+            State.OK if modified_raw else State.NA,
+        ),
+    ]
 
-    if modified_raw and not created_raw:
-        rows.append(MetaRow(
-            "Date de modification", _pdf_date(modified_raw), State.SUSPECT,
-            "Date de modification présente alors que la date de création est absente.",
-        ))
-        consumed.add("modified_after_creation")
-    elif modified_raw and created and modified > created:
-        rows.append(MetaRow(
-            "Date de modification", _pdf_date(modified_raw), State.SUSPECT,
-            "Le document a été modifié après sa création.",
-        ))
-        consumed.add("modified_after_creation")
-    elif modified_raw:
-        rows.append(MetaRow("Date de modification", _pdf_date(modified_raw), State.OK))
-    else:
-        rows.append(MetaRow("Date de modification", "absente", State.NA))
-
-    # ---------------- Identité du document ----------------
-    rows.append(MetaRow(
-        "Auteur déclaré", _txt(doc_info.get("author"), "absent"),
-        State.OK if doc_info.get("author") else State.NA))
-    rows.append(MetaRow(
-        "Titre du document", _txt(doc_info.get("title"), "absent"),
-        State.OK if doc_info.get("title") else State.NA))
-
-    if doc_info.get("page_count") is not None:
-        rows.append(MetaRow("Nombre de pages", str(doc_info["page_count"]), State.NA))
-
-    # ---------------- Capture (images) ----------------
-    if capture or file_type == "image":
-        has_exif = capture.get("has_exif")
-        make, model = capture.get("camera_make"), capture.get("camera_model")
-
-        if has_exif is False or "missing_exif" in codes:
-            consumed.add("missing_exif")
-            rows.append(MetaRow(
-                "Métadonnées de capture (EXIF)", "absentes", State.SUSPECT,
-                "Une photo prise avec un téléphone conserve normalement ses "
-                "données EXIF — leur absence suit souvent un ré-enregistrement.",
-            ))
-        elif has_exif and not (make or model):
-            rows.append(MetaRow(
-                "Métadonnées de capture (EXIF)", "présentes mais vides", State.SUSPECT,
-                "Bloc EXIF conservé mais vidé de son appareil et de sa date.",
-            ))
-        elif has_exif:
-            rows.append(MetaRow("Métadonnées de capture (EXIF)", "présentes", State.OK))
-        else:
-            rows.append(MetaRow("Métadonnées de capture (EXIF)", "non évaluées", State.NA))
-
-        rows.append(MetaRow("Marque de l'appareil", _txt(make, "absente"),
-                            State.OK if make else State.NA))
-        rows.append(MetaRow("Modèle de l'appareil", _txt(model, "absent"),
-                            State.OK if model else State.NA))
-        rows.append(MetaRow(
-            "Date de prise de vue", _txt(capture.get("capture_date"), "absente"),
-            State.OK if capture.get("capture_date") else State.NA))
-        rows.append(MetaRow(
-            "Coordonnées GPS",
-            "présentes" if capture.get("gps_present") else "absentes",
-            State.OK if capture.get("gps_present") else State.NA))
-
-    # ---------------- Caractéristiques techniques ----------------
-    if technical:
-        dimensions = technical.get("dimensions") or {}
-        dpi = technical.get("dpi") or {}
-        rows.append(MetaRow("Format", _txt(technical.get("format")), State.NA))
-        if dimensions.get("width"):
-            rows.append(MetaRow(
-                "Dimensions",
-                f"{dimensions.get('width')} × {dimensions.get('height')} px", State.NA))
-        if dpi.get("x"):
-            rows.append(MetaRow("Résolution", f"{dpi.get('x')} × {dpi.get('y')} DPI",
-                                State.NA))
-
-    # ---------------- Sécurité (PDF) ----------------
-    if security:
-        encrypted = security.get("encrypted")
-        rows.append(MetaRow(
-            "Chiffrement", "oui" if encrypted else "non",
-            State.SUSPECT if encrypted else State.OK,
-            "Document chiffré — une partie des contrôles peut être empêchée."
-            if encrypted else "",
-        ))
-        consumed.add("encrypted")
-        rows.append(MetaRow(
-            "Formulaire interactif", "oui" if security.get("is_form") else "non",
-            State.NA))
-
-    # ---------------- Polices ----------------
-    if fonts:
-        total, embedded = fonts.get("count"), fonts.get("embedded_count")
-        mismatch = "font_mismatch" in codes or "font_mismatch" in hidden_codes
-        rows.append(MetaRow(
-            "Polices utilisées", _txt(total, "non renseigné"),
-            State.FRAUD if mismatch else State.OK,
-            "Police incohérente à l'intérieur du document — signature d'un collage."
-            if mismatch else "",
-        ))
-        if mismatch:
-            consumed.add("font_mismatch")
-        rows.append(MetaRow("Polices embarquées", _txt(embedded, "non renseigné"),
-                            State.NA))
-
-    # ---------------- Contenu masqué / calques ----------------
-    if hidden_codes:
-        for code in hidden_codes:
-            state, _severity, phrase, explication = _anomaly(code)
-            rows.append(MetaRow("Contenu masqué / calques", phrase, state, explication))
-    elif hidden.get("verdict") == "pass":
-        rows.append(MetaRow(
-            "Contenu masqué / calques", "aucun détecté", State.OK,
-            "", ))
-    else:
-        rows.append(MetaRow(
-            "Contenu masqué / calques",
-            _skip_reason(hidden, "non évalué"), State.NA))
-
-    # ---------------- Anomalies non encore consommées ----------------
-    for code in codes:
-        if code in consumed:
-            continue
-        state, _severity, phrase, explication = _anomaly(code)
-        rows.append(MetaRow(str(code).replace("_", " ").capitalize(),
-                            phrase, state, explication))
-
-    # ---------------- Résumé de la couche ----------------
     reds = [r for r in rows if r.state == State.FRAUD]
-    oranges = [r for r in rows if r.state == State.SUSPECT]
     if reds:
         headline = reds[0].note or f"{reds[0].label} : {reds[0].value}"
-    elif oranges:
-        headline = oranges[0].note or f"{oranges[0].label} : {oranges[0].value}"
     elif any(r.state == State.OK for r in rows):
         headline = "Métadonnées cohérentes avec un document authentique"
     else:
@@ -733,10 +631,10 @@ def _build_metadata(api: dict, file_type: str) -> Layer:
         number=2,
         key="metadata",
         name="Métadonnées",
-        subtitle=_subtitle(raw, "Logiciel · appareil · dates · polices · calques"),
+        subtitle=_subtitle(raw, "Logiciel · dates · auteur déclaré"),
         headline=headline,
         table=rows,
-        duration_ms=(raw.get("duration_ms") or 0) + (hidden.get("duration_ms") or 0),
+        duration_ms=raw.get("duration_ms") or 0,
         external_api=bool(raw.get("external_api_call")),
         score=raw.get("score"),
     )
@@ -747,12 +645,65 @@ def _build_metadata(api: dict, file_type: str) -> Layer:
 # Couche 3 — 2D-DOC & QR code
 # --------------------------------------------------------------------------
 
-def _build_twodoc(api: dict) -> Layer:
+def _parse_checks(layer: dict) -> list[CheckRow]:
+    """`signals.checks` de l'API -> lignes de recoupement affichables.
+
+    Format observé :
+        {"label": "62 du 2D-Doc présent dans le document",
+         "detail": "« LORENZO » trouvé", "passed": true}
+    """
+    rows: list[CheckRow] = []
+    for check in ((layer or {}).get("signals") or {}).get("checks") or []:
+        if not isinstance(check, dict):
+            continue
+        label = str(check.get("label") or "").strip()
+        detail = str(check.get("detail") or "").strip()
+        passed = check.get("passed")
+
+        # La valeur portée par l'ancre est entre guillemets français.
+        entre_guillemets = re.search(r"«\s*(.*?)\s*»", detail)
+        if entre_guillemets:
+            attendu = entre_guillemets.group(1)
+            constate = detail.replace(entre_guillemets.group(0), "").strip()
+        else:
+            attendu = detail
+            constate = ""
+        if not constate:
+            constate = "concordant" if passed else "non concordant"
+
+        # « 62 du 2D-Doc présent dans le document » -> « Champ 62 du 2D-Doc »
+        propre = re.sub(r"\s*(présent|présente)\s+dans le document\s*$", "", label)
+        if re.match(r"^\d+\b", propre):
+            propre = f"Champ {propre}"
+
+        rows.append(CheckRow(
+            label=propre or "Recoupement",
+            expected=attendu or "—",
+            observed=constate,
+            state=State.OK if passed else State.FRAUD,
+            detail=detail,
+        ))
+    return rows
+
+
+def _is_twodoc_check(row: CheckRow) -> bool:
+    return "2d-doc" in row.label.lower() or "2ddoc" in row.label.lower()
+
+
+def _build_twodoc(api: dict, checks: list[CheckRow]) -> Layer:
+    """Couche 3 — détection de l'ancre, puis recoupement champ par champ.
+
+    Les recoupements 2D-Doc sont renvoyés par l'API dans la couche `coherence` ;
+    ils sont remontés ici, où ils ont leur sens métier.
+    """
     raw = api.get("qr_2ddoc") or {}
     verdict = raw.get("verdict")
     payload = raw.get("signals") or {}
-    twodoc = payload.get("twodoc") or payload.get("2ddoc") or {}
-    mismatches = [str(m) for m in (payload.get("mismatches") or [])]
+
+    verifie = payload.get("twoddoc_verified")
+    if verifie is None:
+        verifie = payload.get("twodoc_verified")
+    detectes = payload.get("detected_count")
 
     signals: list[Signal] = []
 
@@ -763,21 +714,23 @@ def _build_twodoc(api: dict) -> Layer:
             severity=Severity.HIGH,
             verdict="2D-Doc présent mais illisible ou signature invalide",
         )
-    elif verdict == "pass" and twodoc:
+    elif verifie:
         detection = Signal(
             title="CODE DÉTECTÉ",
             state=State.OK,
             severity=Severity.LOW,
-            verdict="2D-Doc valide (norme AFNOR XP Z42-105)",
-            details=[(str(k), _txt(v)) for k, v in twodoc.items()],
+            verdict="2D-Doc détecté et signature vérifiée (norme AFNOR XP Z42-105)",
         )
-    elif verdict == "pass":
+    elif detectes:
         detection = Signal(
             title="CODE DÉTECTÉ",
-            state=State.SUSPECT,
-            severity=Severity.MEDIUM,
-            verdict="QR code détecté, mais ce n'est pas un 2D-Doc officiel",
-            details=[(str(k), _txt(v)) for k, v in payload.items()],
+            state=State.NA,
+            severity=Severity.NA,
+            verdict=f"{detectes} code(s) détecté(s), sans signature 2D-Doc vérifiable",
+            bullets=[
+                "Un QR code sans signature n'est pas anormal en soi : beaucoup "
+                "de documents en portent un à usage purement informatif.",
+            ],
         )
     else:
         detection = Signal(
@@ -790,29 +743,25 @@ def _build_twodoc(api: dict) -> Layer:
                 "facture n'en comporte pas.",
             ],
         )
+    detection.details = [
+        ("Codes détectés", _txt(detectes, "aucun")),
+        ("Signature 2D-Doc vérifiée", _txt(verifie, "non")),
+    ]
     signals.append(detection)
 
-    if twodoc:
-        if mismatches:
-            signals.append(
-                Signal(
-                    title="COHÉRENCE 2D-DOC / DOCUMENT",
-                    state=State.FRAUD,
-                    severity=Severity.HIGH,
-                    verdict=f"{len(mismatches)} champ(s) du 2D-Doc ne correspondent "
-                            "pas au texte imprimé",
-                    bullets=mismatches,
-                )
+    if checks:
+        echecs = sum(1 for c in checks if c.state != State.OK)
+        signals.append(
+            Signal(
+                title="COHÉRENCE 2D-DOC / DOCUMENT",
+                state=State.FRAUD if echecs else State.OK,
+                severity=Severity.HIGH if echecs else Severity.LOW,
+                verdict=(f"{echecs} champ(s) du 2D-Doc ne correspondent pas au "
+                         "document" if echecs
+                         else f"{len(checks)} recoupement(s) concordant(s) entre "
+                              "le 2D-Doc et le document"),
             )
-        else:
-            signals.append(
-                Signal(
-                    title="COHÉRENCE 2D-DOC / DOCUMENT",
-                    state=State.OK,
-                    severity=Severity.LOW,
-                    verdict="Les champs du 2D-Doc correspondent au texte imprimé",
-                )
-            )
+        )
 
     signals.extend(_extra_anomalies(raw, set()))
 
@@ -821,8 +770,9 @@ def _build_twodoc(api: dict) -> Layer:
         key="qr_2ddoc",
         name="2D-DOC & QR code",
         subtitle=_subtitle(raw, "Lecture de l'ancre cryptographique · recoupement"),
-        headline=signals[0].verdict,
+        headline=_layer_headline(signals, signals[0].verdict, signals[0].verdict),
         signals=signals,
+        checks=checks,
         duration_ms=raw.get("duration_ms") or 0,
         external_api=bool(raw.get("external_api_call")),
         score=raw.get("score"),
@@ -847,9 +797,33 @@ GENERATOR_LABELS = {
 }
 
 
+def _c2pa_signature(payload: dict) -> dict | None:
+    """Cherche une signature de provenance C2PA dans les signaux de la couche.
+
+    Le nom du champ n'est pas encore fixé côté moteur : on essaie les
+    appellations courantes. Renvoie le détail à afficher, ou None si absent.
+    """
+    for cle in ("c2pa", "content_credentials", "contentCredentials",
+                "provenance", "manifest"):
+        valeur = payload.get(cle)
+        if valeur in (None, False, {}, [], ""):
+            continue
+        if isinstance(valeur, dict):
+            # Un bloc explicite « non détecté » ne doit pas déclencher d'alerte.
+            if valeur.get("is_detected") is False or valeur.get("present") is False:
+                continue
+            return valeur
+        if valeur is True:
+            return {"Signature détectée": "oui"}
+        return {"Signature détectée": str(valeur)}
+    return None
+
+
 def _build_ai_media(api: dict, document: dict, debug: dict, file_type: str) -> Layer:
     raw = api.get("ai_generated_image") or {}
     payload = raw.get("signals") or {}
+    # Les preuves de provenance sont remontées par le moteur dans hidden_content.
+    hidden_codes = _anomaly_codes(api.get("hidden_content") or {})
     # Le bloc debug a disparu de l'API ; on le lit encore s'il revient un jour.
     ai_block = (((debug.get("external_api") or {}).get("raw_response") or {})
                 .get("report") or {}).get("ai_generated") or {}
@@ -861,7 +835,14 @@ def _build_ai_media(api: dict, document: dict, debug: dict, file_type: str) -> L
     score = raw.get("score")
     label = payload.get("label")
 
-    if not raw:
+    if not raw and file_type == "image":
+        generation = Signal(
+            title="IMAGE GÉNÉRÉE PAR IA",
+            state=State.NA,
+            severity=Severity.NA,
+            verdict="Détecteur d'images générées non exécuté sur ce document",
+        )
+    elif not raw:
         generation = Signal(
             title="IMAGE GÉNÉRÉE PAR IA",
             state=State.NA,
@@ -907,45 +888,37 @@ def _build_ai_media(api: dict, document: dict, debug: dict, file_type: str) -> L
     ]
     signals.append(generation)
 
-    # --- Deepfake -----------------------------------------------------------
-    deepfake = payload.get("deepfake") or {}
-    if raw and deepfake:
-        detected = deepfake.get("is_detected")
-        conf = deepfake.get("confidence")
+    # --- Signatures de provenance -------------------------------------------
+    # Le moteur remonte ces preuves comme codes d'anomalie dans `hidden_content`.
+    # Elles appartiennent metier a cette couche : on les y affiche.
+    for code in ("c2pa_manifest", "ai_generation_signature"):
+        if code not in hidden_codes:
+            continue
+        etat, severite, phrase, explication = _anomaly(code)
         signals.append(
             Signal(
-                title="VISAGE MANIPULÉ / DEEPFAKE",
-                state=State.FRAUD if detected else State.OK,
-                severity=Severity.HIGH if detected else Severity.LOW,
-                verdict=(f"Manipulation de visage détectée — confiance {_pct(conf)}"
-                         if detected
-                         else f"Aucune manipulation de visage détectée — score {_pct(conf)}"),
-                details=[("Score de détection", _pct(conf))],
+                title=("SIGNATURE DE PROVENANCE C2PA" if code == "c2pa_manifest"
+                       else "SIGNATURE DE GÉNÉRATION PAR IA"),
+                state=etat,
+                severity=severite,
+                verdict=phrase,
+                bullets=[explication] if explication else [],
+                details=[("Code moteur", code),
+                         ("Couche d'origine", "hidden_content")],
             )
         )
 
-    # --- Photo d'écran ------------------------------------------------------
-    recaptured = document.get("is_recaptured")
-    if recaptured is True:
+    # Champ structure, si le moteur en expose un un jour en plus des codes.
+    c2pa = _c2pa_signature(payload)
+    if c2pa and "c2pa_manifest" not in hidden_codes:
         signals.append(
             Signal(
-                title="PHOTO D'ÉCRAN / REPHOTOGRAPHIE",
-                state=State.SUSPECT,
-                severity=Severity.MEDIUM,
-                verdict="Le document semble être la photo d'un écran plutôt qu'un original",
-                bullets=[
-                    "Rephotographier un écran est la méthode la plus simple pour "
-                    "effacer les traces d'une retouche.",
-                ],
-            )
-        )
-    elif recaptured is False and raw:
-        signals.append(
-            Signal(
-                title="PHOTO D'ÉCRAN / REPHOTOGRAPHIE",
-                state=State.OK,
-                severity=Severity.LOW,
-                verdict="Aucun indice de photo d'écran ou de rephotographie",
+                title="SIGNATURE DE PROVENANCE C2PA",
+                state=State.FRAUD,
+                severity=Severity.HIGH,
+                verdict="Signature C2PA détectée — le fichier porte une preuve "
+                        "de génération par intelligence artificielle",
+                details=[(str(k), _txt(v)) for k, v in c2pa.items()],
             )
         )
 
@@ -961,7 +934,7 @@ def _build_ai_media(api: dict, document: dict, debug: dict, file_type: str) -> L
         number=4,
         key="ai_generated_image",
         name="Images générées par IA",
-        subtitle=_subtitle(raw, "Modèle générateur · deepfake · photo d'écran"),
+        subtitle=_subtitle(raw, "Détection de génération par IA · signature C2PA"),
         headline=headline,
         signals=signals,
         duration_ms=raw.get("duration_ms") or 0,
@@ -971,7 +944,7 @@ def _build_ai_media(api: dict, document: dict, debug: dict, file_type: str) -> L
 
 
 # --------------------------------------------------------------------------
-# Couche 5 — Cohérence sémantique
+# Couche 5 — Cohérence
 # --------------------------------------------------------------------------
 
 def _inconsistencies(layer: dict) -> list[str]:
@@ -981,62 +954,42 @@ def _inconsistencies(layer: dict) -> list[str]:
     return [str(i.get("label") if isinstance(i, dict) else i) for i in issues]
 
 
-def _build_coherence(api: dict, debug: dict, file_type: str) -> Layer:
+def _build_coherence(api: dict, debug: dict, file_type: str,
+                     checks: list[CheckRow] | None = None) -> Layer:
     raw = api.get("coherence") or {}
     verdict = raw.get("verdict")
+    checks = checks or []
 
     bullets = _inconsistencies(raw)
 
     signals: list[Signal] = []
 
-    if bullets:
-        semantic = Signal(
-            title="COHÉRENCE SÉMANTIQUE",
-            state=State.FRAUD if len(bullets) >= 3 else State.SUSPECT,
-            severity=Severity.HIGH if len(bullets) >= 3 else Severity.MEDIUM,
-            verdict=f"{len(bullets)} incohérence(s) détectée(s) dans le document",
-            bullets=bullets,
-        )
-    elif verdict == "pass":
-        semantic = Signal(
-            title="COHÉRENCE SÉMANTIQUE",
-            state=State.OK,
-            severity=Severity.LOW,
-            verdict="Aucune incohérence détectée entre les données du document",
-        )
-    else:
-        semantic = Signal(
-            title="COHÉRENCE SÉMANTIQUE",
-            state=State.NA,
-            severity=Severity.NA,
-            verdict=_skip_reason(raw, "Aucune donnée exploitable à recouper"),
-        )
-    semantic.details = [
-        ("Texte extrait (OCR)", "oui" if debug.get("ocr_text") else "non exposé par l'API"),
-        ("Ce qui est recoupé", "Cohérence des calculs, des dates, des identités et "
-                               "des références bancaires entre eux"),
-    ]
-    signals.append(semantic)
-
-    # --- Recoupement par IA en vision (couche `ai_coherence`) ---------------
+    # --- Recoupement par IA (couche `ai_coherence`) -------------------------
     ai_raw = api.get("ai_coherence")
     ai_bullets = _inconsistencies(ai_raw or {})
     ai_reason = (ai_raw or {}).get("skip_reason")
 
-    if ai_raw is None:
+    if ai_raw is None and file_type == "pdf":
         vision = Signal(
-            title="RECOUPEMENT PAR IA (VISION)",
+            title="RECOUPEMENT PAR IA",
             state=State.NA,
             severity=Severity.NA,
-            verdict="Le contrôle par IA ne s'exécute pas sur ce type de document",
+            verdict="Le contrôle par IA ne s'exécute pas sur les PDF",
             bullets=[
-                "Seules les images sont soumises au modèle de vision ; un PDF "
-                "n'est aujourd'hui pas analysé par ce contrôle.",
-            ] if file_type == "pdf" else [],
+                "Seules les images sont aujourd'hui soumises au modèle ; un PDF "
+                "n'est pas analysé par ce contrôle.",
+            ],
+        )
+    elif ai_raw is None:
+        vision = Signal(
+            title="RECOUPEMENT PAR IA",
+            state=State.NA,
+            severity=Severity.NA,
+            verdict="Recoupement par IA non exécuté sur ce document",
         )
     elif ai_bullets:
         vision = Signal(
-            title="RECOUPEMENT PAR IA (VISION)",
+            title="RECOUPEMENT PAR IA",
             state=State.FRAUD if len(ai_bullets) >= 3 else State.SUSPECT,
             severity=Severity.HIGH if len(ai_bullets) >= 3 else Severity.MEDIUM,
             verdict=f"{len(ai_bullets)} incohérence(s) relevée(s) par l'analyse visuelle",
@@ -1044,7 +997,7 @@ def _build_coherence(api: dict, debug: dict, file_type: str) -> Layer:
         )
     elif _is_failure(ai_reason):
         vision = Signal(
-            title="RECOUPEMENT PAR IA (VISION)",
+            title="RECOUPEMENT PAR IA",
             state=State.ERROR,
             severity=Severity.NA,
             verdict="Le contrôle par IA n'a pas abouti — résultat indisponible",
@@ -1055,14 +1008,14 @@ def _build_coherence(api: dict, debug: dict, file_type: str) -> Layer:
         )
     elif (ai_raw or {}).get("verdict") == "pass":
         vision = Signal(
-            title="RECOUPEMENT PAR IA (VISION)",
+            title="RECOUPEMENT PAR IA",
             state=State.OK,
             severity=Severity.LOW,
             verdict="Aucune incohérence relevée par l'analyse visuelle du document",
         )
     else:
         vision = Signal(
-            title="RECOUPEMENT PAR IA (VISION)",
+            title="RECOUPEMENT PAR IA",
             state=State.NA,
             severity=Severity.NA,
             verdict=_skip_reason(ai_raw or {}, "Recoupement par IA non applicable"),
@@ -1075,36 +1028,21 @@ def _build_coherence(api: dict, debug: dict, file_type: str) -> Layer:
     ]
     signals.append(vision)
 
-    signals.append(
-        Signal(
-            title="CARACTÈRES UNICODE SUSPECTS",
-            state=State.TBU,
-            severity=Severity.NA,
-            verdict="Détection des homoglyphes (ex. « о » cyrillique dans un IBAN) — "
-                    "bientôt disponible",
-            details=[
-                ("Statut", "En cours d'intégration côté moteur"),
-                ("Principe", "Un caractère visuellement identique mais issu d'un "
-                             "autre alphabet casse un contrôle automatique tout en "
-                             "restant invisible à l'œil"),
-            ],
-        )
-    )
-
     signals.extend(_extra_anomalies(raw, set()))
     signals.extend(_extra_anomalies(ai_raw or {}, set()))
 
     return Layer(
         number=5,
         key="coherence",
-        name="Cohérence sémantique",
-        subtitle=_subtitle(raw, "Recoupement des données par IA · calculs · dates"),
+        name="Cohérence",
+        subtitle=_subtitle(raw, "Recoupement des données du document par IA"),
         headline=_layer_headline(
             signals,
             "Aucune incohérence détectée dans le contenu du document",
-            semantic.verdict,
+            vision.verdict,
         ),
         signals=signals,
+        checks=checks,
         duration_ms=(raw.get("duration_ms") or 0)
         + ((ai_raw or {}).get("duration_ms") or 0),
         external_api=bool(raw.get("external_api_call"))
@@ -1147,19 +1085,25 @@ def _global_score(api: dict) -> int:
     return max(0, min(100, round(worst * 100)))
 
 
-def build_report(data: dict) -> Report:
+def build_report(data: dict, policy: dict | None = None) -> Report:
     """Point d'entrée : réponse brute de l'API -> objet Report affichable."""
     document = data.get("document") or {}
     debug = data.get("debug") or {}
     api = _api_layers(document)
     file_type = _file_type(document, api)
 
+    # Les recoupements sont renvoyés par l'API dans `coherence`. Ceux qui portent
+    # sur le 2D-Doc appartiennent métier à la couche 3 : on les y remonte.
+    tous_checks = _parse_checks(api.get("coherence") or {})
+    checks_twodoc = [c for c in tous_checks if _is_twodoc_check(c)]
+    checks_autres = [c for c in tous_checks if not _is_twodoc_check(c)]
+
     layers = [
         _build_history(api, file_type),
-        _build_metadata(api, file_type),
-        _build_twodoc(api),
+        _build_metadata(api, file_type, policy),
+        _build_twodoc(api, checks_twodoc),
         _build_ai_media(api, document, debug, file_type),
-        _build_coherence(api, debug, file_type),
+        _build_coherence(api, debug, file_type, checks_autres),
     ]
 
     key = str(document.get("verdict") or "").lower()

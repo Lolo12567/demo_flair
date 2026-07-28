@@ -10,7 +10,7 @@ import html
 
 from nicegui import ui
 
-from .model import DiffRow, Layer, MetaRow, Report, Severity, Signal, State
+from .model import CheckRow, DiffRow, Layer, MetaRow, Report, Severity, Signal, State
 
 # Libellé du niveau de risque affiché dans la colonne 3 du tableau.
 RISK_LABEL = {
@@ -113,6 +113,60 @@ def signal_card(signal: Signal) -> None:
                 key_values(signal.details)
 
 
+def options_panel(policy: dict, on_change) -> None:
+    """Panneau « Options d'analyse » : niveau de risque par famille de logiciel.
+
+    `on_change` est rappelé à chaque modification pour rejouer la traduction de
+    la réponse déjà en mémoire — aucun nouvel appel à l'API.
+    """
+    from .policy import FAMILIES, LEVEL_BY_NAME, LEVELS, NAME_BY_LEVEL
+
+    with ui.column().classes("panel w-full gap-0 optpanel"):
+        header = ui.row().classes(
+            "optpanel-head w-full items-center justify-between no-wrap"
+        )
+        with header:
+            with ui.row().classes("items-center gap-3 no-wrap"):
+                caret = ui.label("›").classes("caret mono")
+                ui.label("Options d'analyse").classes("optpanel-title")
+            ui.label("Politique de risque sur les logiciels").classes("layer-meta")
+
+        body = ui.column().classes("optpanel-body w-full gap-0")
+        with body:
+            ui.label(
+                "Choisissez les familles de logiciels que vous considérez comme "
+                "suspectes sur un document justificatif. Le verdict se recalcule "
+                "immédiatement, sans renvoyer le document."
+            ).classes("smallprint").style("max-width:42rem")
+
+            for famille in FAMILIES:
+                with ui.row().classes("optrow w-full items-center justify-between no-wrap gap-4"):
+                    with ui.column().classes("gap-1"):
+                        ui.label(famille.name).classes("optname")
+                        ui.label(famille.examples).classes("optexamples")
+                    ui.select(
+                        [nom for nom, _ in LEVELS],
+                        value=NAME_BY_LEVEL[policy.get(famille.key, famille.default)],
+                        on_change=lambda e, cle=famille.key: (
+                            policy.__setitem__(cle, LEVEL_BY_NAME[e.value]),
+                            on_change(),
+                        ),
+                    ).props("outlined dense options-dense").classes("optselect")
+
+        body.set_visibility(False)
+        etat = {"open": False}
+
+        def toggle() -> None:
+            etat["open"] = not etat["open"]
+            body.set_visibility(etat["open"])
+            if etat["open"]:
+                caret.classes(add="caret-open")
+            else:
+                caret.classes(remove="caret-open")
+
+        header.on("click", toggle)
+
+
 def meta_table(rows: list[MetaRow]) -> None:
     """Tableau à trois colonnes : catégorie · information · niveau de risque."""
     with ui.element("div").classes("mtable w-full"):
@@ -177,6 +231,41 @@ def diff_list(diffs: list[DiffRow]) -> None:
                         ])
 
 
+def check_list(checks: list[CheckRow]) -> None:
+    """Recoupements : donnée portée par l'ancre à gauche, constat à droite.
+
+    Vert quand les deux concordent, rouge sinon — le même format que les
+    modifications de contenu, mais avec la couleur pilotée par le résultat.
+    """
+    echecs = sum(1 for c in checks if c.state != State.OK)
+    with ui.column().classes("w-full gap-0"):
+        with ui.row().classes("difflegend w-full items-center justify-between no-wrap"):
+            ui.label(f"{len(checks)} recoupement(s)").classes("section-title")
+            ui.label(
+                f"{echecs} en échec" if echecs else "tous concordants"
+            ).classes("layer-meta")
+
+        for check in checks:
+            tone = check.state.value
+            with ui.column().classes(f"diffcard diffcard-{tone} w-full gap-2"):
+                with ui.row().classes("w-full items-center justify-between no-wrap gap-3"):
+                    ui.label(check.label).classes("signal-title")
+                    ui.label(RISK_LABEL[check.state]).classes(
+                        f"sev {SEVERITY_CLASS[check.state]}"
+                    )
+
+                with ui.element("div").classes("diffgrid w-full"):
+                    with ui.column().classes("diffside diffside-before"):
+                        ui.label("Dans le 2D-Doc").classes("difflabel")
+                        ui.label(check.expected).classes("diffvalue")
+                    ui.label("→" if check.state == State.OK else "≠").classes(
+                        "diffarrow mono"
+                    )
+                    with ui.column().classes(f"diffside checkside-{tone}"):
+                        ui.label("Sur le document").classes("difflabel")
+                        ui.label(check.observed).classes(f"diffvalue checkvalue-{tone}")
+
+
 def layer_block(layer: Layer, *, open_: bool = False) -> None:
     """Une couche : en-tête cliquable + cartes de signaux."""
     tone = layer.state.value
@@ -210,6 +299,8 @@ def layer_block(layer: Layer, *, open_: bool = False) -> None:
                 signal_card(signal)
             if layer.diffs:
                 diff_list(layer.diffs)
+            if layer.checks:
+                check_list(layer.checks)
             if layer.external_api:
                 ui.label(
                     "Cette couche fait appel à un service d'analyse externe."

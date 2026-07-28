@@ -32,6 +32,7 @@ except ImportError:
 from flair import components as fc
 from flair import preview, theme
 from flair.adapter import build_report
+from flair.policy import default_policy
 
 API_URL = os.getenv("FLAIR_API_URL", "https://api.myflair.app/v1/analyze")
 API_KEY = os.getenv("FLAIR_API_KEY", "")
@@ -42,7 +43,7 @@ PENDING_LAYERS = [
     (2, "Métadonnées", "Logiciel · appareil · dates · polices · calques"),
     (3, "2D-DOC & QR code", "Lecture de l'ancre cryptographique · recoupement"),
     (4, "Images générées par IA", "Modèle générateur · deepfake · photo d'écran"),
-    (5, "Cohérence sémantique", "Recoupement des données par IA"),
+    (5, "Cohérence", "Recoupement des données du document par IA"),
 ]
 
 
@@ -112,6 +113,10 @@ def main_page():
                     on_upload=lambda e: analyze(e),
                 ).props('accept=".pdf,image/*" flat')
 
+        # Politique de risque de cette session, réglable dans le panneau.
+        policy = default_policy()
+        fc.options_panel(policy, lambda: rejouer_analyse())
+
         doc_slot = ui.column().classes("w-full")
         verdict_slot = ui.column().classes("w-full")
         layers_slot = ui.column().classes("w-full gap-3")
@@ -128,6 +133,23 @@ def main_page():
         # ------------------------------------------------------------------
         # Orchestration
         # ------------------------------------------------------------------
+
+        # Dernière réponse brute de l'API, gardée pour rejouer la traduction
+        # quand la politique de risque change — sans réanalyser le document.
+        derniere_reponse: dict = {"raw": None}
+
+        def rejouer_analyse() -> None:
+            """Recalcule et redessine le rapport avec la politique courante."""
+            if not derniere_reponse["raw"]:
+                return
+            report = build_report(derniere_reponse["raw"], policy)
+            verdict_slot.clear()
+            layers_slot.clear()
+            with verdict_slot:
+                fc.verdict_card(report)
+            with layers_slot:
+                for layer in report.layers:
+                    fc.layer_block(layer, open_=layer.alert_count > 0)
 
         def show_error(message: str) -> None:
             layers_slot.clear()
@@ -183,7 +205,7 @@ def main_page():
             scan.delete()
 
             try:
-                report = build_report(raw)
+                report = build_report(raw, policy)
             except Exception as exc:
                 show_error(
                     "L'API a répondu, mais le format reçu n'est pas celui attendu "
@@ -197,6 +219,8 @@ def main_page():
                             json.dumps(raw, indent=2, ensure_ascii=False), language="json"
                         ).classes("w-full")
                 return
+
+            derniere_reponse["raw"] = raw
 
             # Couche 0 — verdict global
             with verdict_slot:

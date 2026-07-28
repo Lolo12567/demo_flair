@@ -105,6 +105,17 @@ class DiffRow:
 
 
 @dataclass
+class CheckRow:
+    """Un recoupement : ce que dit l'ancre, face à ce qu'on trouve sur le document."""
+
+    label: str  # "Champ 62 du 2D-Doc"
+    expected: str  # valeur portée par l'ancre
+    observed: str  # ce qui a été constaté sur le document
+    state: State  # OK si le recoupement passe, FRAUD sinon
+    detail: str = ""  # phrase brute renvoyée par le moteur
+
+
+@dataclass
 class Layer:
     """Une des 5 couches de détection.
 
@@ -120,6 +131,7 @@ class Layer:
     signals: list[Signal] = field(default_factory=list)
     table: list[MetaRow] = field(default_factory=list)
     diffs: list[DiffRow] = field(default_factory=list)
+    checks: list[CheckRow] = field(default_factory=list)
     duration_ms: int = 0
     external_api: bool = False
     score: float | None = None
@@ -129,6 +141,7 @@ class Layer:
             [s.state for s in self.signals]
             + [r.state for r in self.table]
             + [d.state for d in self.diffs]
+            + [c.state for c in self.checks]
         )
 
     @property
@@ -142,7 +155,11 @@ class Layer:
         Les `diffs` en sont exclus : ils sont déjà résumés par le signal
         « Modifications de contenu », les compter deux fois gonflerait le badge.
         """
-        states = [s.state for s in self.signals] + [r.state for r in self.table]
+        states = (
+            [s.state for s in self.signals]
+            + [r.state for r in self.table]
+            + [c.state for c in self.checks if c.state == State.FRAUD]
+        )
         return sum(1 for s in states if s in (State.FRAUD, State.SUSPECT))
 
     def alerts(self) -> list[tuple[State, str]]:
@@ -156,6 +173,10 @@ class Layer:
         found += [
             (r.state, r.note or f"{r.label} : {r.value}")
             for r in self.table
+        ]
+        found += [
+            (c.state, f"{c.label} : {c.observed}")
+            for c in self.checks if c.state == State.FRAUD
         ]
         return [
             item for item in found
