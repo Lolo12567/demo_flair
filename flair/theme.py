@@ -188,6 +188,28 @@ body {
   border-radius:7px; padding:11px 14px; color:var(--accent); }
 .dedup-text { font-size:.79rem; line-height:1.55; color:var(--ink-2); }
 
+/* ---------- retour utilisateur ---------- */
+.feedback { border-left:5px solid var(--accent); }
+.feedback-title { font-family:'IBM Plex Serif',serif; font-weight:600; font-size:1.15rem; }
+.feedback-question { font-size:.9rem; font-weight:500; }
+.fb-btn { min-width:88px; border-radius:6px !important; font-size:.85rem !important; }
+.fb-btn-active { background:var(--accent) !important; color:#fff !important;
+  border-color:var(--accent) !important; }
+.fb-submit { background:var(--accent) !important; color:#fff !important;
+  border-radius:6px !important; font-size:.85rem !important; }
+.fbgroup { padding:10px 0 4px 0; border-top:1px dashed var(--line); }
+.fbgroup-title { font-family:'IBM Plex Mono',monospace; font-size:.66rem;
+  letter-spacing:.16em; text-transform:uppercase; color:var(--ink); font-weight:500; }
+.fbgroup-help { font-size:.74rem; color:var(--ink-2); margin-bottom:2px; }
+.fbcheck .q-checkbox__label { font-size:.83rem; line-height:1.45; }
+.fbtext .q-field__control { background:var(--card); font-size:.85rem; }
+.fberror { font-size:.8rem; color:var(--fraud); }
+
+/* zone de dépôt verrouillée tant que le retour n'est pas donné */
+.dropzone-locked { opacity:.45; pointer-events:none; filter:grayscale(1); }
+.dropzone-notice { font-size:.78rem; color:var(--accent); text-align:center;
+  padding-top:8px; }
+
 /* ---------- panneau d'options ---------- */
 .optpanel { overflow:hidden; }
 .optpanel-head { padding:12px 18px; cursor:pointer; user-select:none;

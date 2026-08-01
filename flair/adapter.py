@@ -1086,6 +1086,20 @@ def _global_score(api: dict) -> int:
 
 
 def build_report(data: dict, policy: dict | None = None) -> Report:
+    """Point d'entrée unique. Aiguille vers le lecteur correspondant au format reçu.
+
+    Les deux formats coexistent durablement : un document analysé avant la
+    migration rejoue son analyse telle qu'elle avait été stockée, donc à
+    l'ancien format, même longtemps après le déploiement du nouveau.
+    """
+    from . import adapter_v2
+
+    if adapter_v2.est_format_v2(data):
+        return adapter_v2.build_report(data, policy)
+    return _build_report_legacy(data, policy)
+
+
+def _build_report_legacy(data: dict, policy: dict | None = None) -> Report:
     """Point d'entrée : réponse brute de l'API -> objet Report affichable."""
     document = data.get("document") or {}
     debug = data.get("debug") or {}

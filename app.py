@@ -30,9 +30,11 @@ except ImportError:
     pass
 
 from flair import components as fc
-from flair import preview, theme
+from flair import feedback, preview, theme
 from flair.adapter import build_report
 from flair.policy import default_policy
+
+print(f"[flair] base de retours : {feedback.init()}")
 
 API_URL = os.getenv("FLAIR_API_URL", "https://api.myflair.app/v1/analyze")
 API_KEY = os.getenv("FLAIR_API_KEY", "")
@@ -100,7 +102,8 @@ def main_page():
                 "ne peut être vérifiée."
             ).classes("hero-sub")
 
-        with ui.element("div").classes("dropzone"):
+        zone = ui.element("div").classes("dropzone")
+        with zone:
             for pos in ("tl", "tr", "bl", "br"):
                 ui.element("div").classes(f"corner {pos}")
             with ui.column().classes("w-full items-center gap-2"):
@@ -113,6 +116,11 @@ def main_page():
                     on_upload=lambda e: analyze(e),
                 ).props('accept=".pdf,image/*" flat')
 
+        notice = ui.label(
+            "Donnez votre avis sur le verdict ci-dessous pour analyser un autre document."
+        ).classes("dropzone-notice w-full")
+        notice.set_visibility(False)
+
         # Politique de risque de cette session, réglable dans le panneau.
         policy = default_policy()
         fc.options_panel(policy, lambda: rejouer_analyse())
@@ -120,6 +128,7 @@ def main_page():
         doc_slot = ui.column().classes("w-full")
         verdict_slot = ui.column().classes("w-full")
         layers_slot = ui.column().classes("w-full gap-3")
+        feedback_slot = ui.column().classes("w-full")
         raw_slot = ui.column().classes("w-full")
 
         with ui.column().classes("footer w-full pt-5 gap-1 items-center"):
@@ -151,6 +160,15 @@ def main_page():
                 for layer in report.layers:
                     fc.layer_block(layer, open_=layer.alert_count > 0)
 
+        def verrouiller(actif: bool) -> None:
+            """Bloque la zone de dépôt tant que le retour n'est pas donné."""
+            upload.set_enabled(not actif)
+            notice.set_visibility(actif)
+            if actif:
+                zone.classes(add="dropzone-locked")
+            else:
+                zone.classes(remove="dropzone-locked")
+
         def show_error(message: str) -> None:
             layers_slot.clear()
             verdict_slot.clear()
@@ -167,7 +185,7 @@ def main_page():
             size_kb = len(content) / 1024
             upload.reset()
 
-            for slot in (doc_slot, verdict_slot, layers_slot, raw_slot):
+            for slot in (doc_slot, verdict_slot, layers_slot, feedback_slot, raw_slot):
                 slot.clear()
 
             # Aperçu : les octets restent en mémoire vive, jamais sur le disque.
@@ -232,6 +250,15 @@ def main_page():
                 await asyncio.sleep(0.18)
                 with layers_slot:
                     fc.layer_block(layer, open_=layer.alert_count > 0)
+
+            # Retour obligatoire : la zone de dépôt reste verrouillée jusqu'à la réponse.
+            verrouiller(True)
+            with feedback_slot:
+                fc.feedback_form(
+                    filename=filename,
+                    verdict=report.verdict_label,
+                    on_submit=lambda: verrouiller(False),
+                )
 
             with raw_slot:
                 with ui.expansion("Réponse JSON de l'API").classes(

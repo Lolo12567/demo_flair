@@ -135,6 +135,9 @@ class Layer:
     duration_ms: int = 0
     external_api: bool = False
     score: float | None = None
+    # Verdict fourni par le moteur. Quand il est présent, il fait foi : on
+    # n'agrège pas soi-même ce que l'API a déjà tranché.
+    state_override: State | None = None
 
     def _states(self) -> list[State]:
         return (
@@ -146,6 +149,8 @@ class Layer:
 
     @property
     def state(self) -> State:
+        if self.state_override is not None:
+            return self.state_override
         return worst_state(self._states())
 
     @property

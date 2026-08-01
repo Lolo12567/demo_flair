@@ -113,6 +113,104 @@ def signal_card(signal: Signal) -> None:
                 key_values(signal.details)
 
 
+def feedback_form(filename: str, verdict: str, on_submit) -> None:
+    """Retour obligatoire sur le verdict, avant de pouvoir analyser un autre document.
+
+    `on_submit` est appelé une fois l'enregistrement fait, pour rendre la main.
+    """
+    from . import feedback as fb
+
+    etat: dict = {"satisfait": None, "motifs": set()}
+
+    with ui.column().classes("panel feedback w-full p-6 gap-4 fade-in") as bloc:
+        ui.label("Votre avis sur ce verdict").classes("feedback-title")
+        ui.label(
+            "Cette réponse est nécessaire pour analyser un autre document. "
+            "C'est elle qui nous permet de repérer ce que le moteur ne voit pas."
+        ).classes("smallprint").style("max-width:40rem")
+
+        with ui.row().classes("w-full items-center gap-3 no-wrap"):
+            ui.label("Le verdict est-il correct ?").classes("feedback-question")
+            bouton_oui = ui.button("Oui").props("outline no-caps").classes("fb-btn")
+            bouton_non = ui.button("Non").props("outline no-caps").classes("fb-btn")
+
+        detail = ui.column().classes("w-full gap-3")
+        detail.set_visibility(False)
+
+        with detail:
+            ui.element("div").classes("sep")
+            ui.label(
+                "Qu'est-ce que le moteur a manqué ? Cochez ce qui s'applique."
+            ).classes("feedback-question")
+
+            for groupe in fb.GROUPES:
+                with ui.column().classes("fbgroup w-full gap-1"):
+                    ui.label(groupe.titre).classes("fbgroup-title")
+                    ui.label(groupe.aide).classes("fbgroup-help")
+                    for motif in groupe.motifs:
+                        ui.checkbox(
+                            motif.label,
+                            on_change=lambda e, code=motif.code: (
+                                etat["motifs"].add(code) if e.value
+                                else etat["motifs"].discard(code)
+                            ),
+                        ).classes("fbcheck")
+
+            commentaire = ui.textarea(
+                placeholder="Précisions libres (facultatif si vous avez coché une case)"
+            ).props("outlined autogrow").classes("w-full fbtext")
+
+        erreur = ui.label("").classes("fberror")
+        erreur.set_visibility(False)
+
+        bouton_envoyer = ui.button("Envoyer et analyser un autre document").props(
+            "unelevated no-caps"
+        ).classes("fb-submit")
+        bouton_envoyer.set_visibility(False)
+
+        def choisir(satisfait: bool) -> None:
+            etat["satisfait"] = satisfait
+            detail.set_visibility(not satisfait)
+            bouton_envoyer.set_visibility(True)
+            erreur.set_visibility(False)
+            for bouton, actif in ((bouton_oui, satisfait), (bouton_non, not satisfait)):
+                if actif:
+                    bouton.classes(add="fb-btn-active")
+                else:
+                    bouton.classes(remove="fb-btn-active")
+
+        bouton_oui.on("click", lambda: choisir(True))
+        bouton_non.on("click", lambda: choisir(False))
+
+        def envoyer() -> None:
+            if etat["satisfait"] is None:
+                return
+            texte = commentaire.value if not etat["satisfait"] else ""
+            if not etat["satisfait"] and not etat["motifs"] and not (texte or "").strip():
+                erreur.text = ("Cochez au moins une case ou décrivez brièvement "
+                               "ce qui ne va pas.")
+                erreur.set_visibility(True)
+                return
+            fb.enregistrer(
+                nom_document=filename,
+                verdict=verdict,
+                satisfait=bool(etat["satisfait"]),
+                motifs=sorted(etat["motifs"]),
+                justification=texte,
+            )
+            bloc.clear()
+            with bloc:
+                ui.label("Merci — votre retour est enregistré.").classes(
+                    "feedback-title"
+                ).style("color:var(--ok)")
+                ui.label(
+                    "Vous pouvez analyser un autre document."
+                ).classes("smallprint")
+            on_submit()
+
+        bouton_envoyer.on("click", envoyer)
+
+
 def options_panel(policy: dict, on_change) -> None:
     """Panneau « Options d'analyse » : niveau de risque par famille de logiciel.
 
