@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from .model import (CheckRow, DiffRow, Layer, MetaRow, Report, Severity, Signal,
                     State)
-from .policy import FAMILIES, default_policy
 
 # Verdict renvoye par l'API -> etat affiche.
 ETATS = {
@@ -44,10 +43,6 @@ VERDICTS_DOCUMENT = {
     "low": "Risque faible",
     "clean": "Risque faible",
 }
-
-# Signaux dont la valeur est un nom de logiciel : la politique de risque
-# configuree dans le panneau d'options s'y applique.
-SIGNAUX_LOGICIEL = ("creation_software", "editing_software", "producer", "creator")
 
 MARQUEURS_ECHEC = (
     "indisponible", "non parsable", "unparsable", "erreur", "error",
@@ -109,29 +104,6 @@ def _puces(signal: dict) -> list[str]:
     return []
 
 
-def _politique_logiciel(nom_signal: str, valeur, policy,
-                        etat_api: State) -> State | None:
-    """Niveau imposé par le panneau d'options, ou None pour garder celui du moteur.
-
-    Deux sens de lecture :
-      - famille réglée sur modéré ou élevé -> ce niveau s'applique ;
-      - famille réglée sur neutre -> on ne redescend que si le moteur avait
-        signalé le logiciel. Un éditeur que l'API qualifie de « connu, non
-        signalé » doit rester vert, pas devenir gris.
-    """
-    if nom_signal not in SIGNAUX_LOGICIEL or not valeur:
-        return None
-    minuscules = str(valeur).lower()
-    politique = policy or default_policy()
-    for famille in FAMILIES:
-        if any(motif in minuscules for motif in famille.patterns):
-            niveau = politique.get(famille.key, famille.default)
-            if niveau in (State.SUSPECT, State.FRAUD):
-                return niveau
-            return State.OK if etat_api in (State.SUSPECT, State.FRAUD) else None
-    return None
-
-
 def _valeur_tableau(brut: dict) -> str:
     """La colonne « information » du tableau des métadonnées.
 
@@ -155,14 +127,9 @@ def _valeur_tableau(brut: dict) -> str:
     return "—"
 
 
-def _signal(brut: dict, policy) -> Signal:
+def _signal(brut: dict) -> Signal:
     motif = brut.get("skip_reason")
     etat = _etat(brut.get("verdict"), motif)
-
-    impose = _politique_logiciel(str(brut.get("name") or ""), brut.get("value"),
-                                 policy, etat)
-    if impose is not None:
-        etat = impose
 
     phrase = brut.get("description") or brut.get("value") or motif or brut.get("label")
     return Signal(
@@ -175,15 +142,11 @@ def _signal(brut: dict, policy) -> Signal:
     )
 
 
-def _lignes_metadonnees(signaux: list[dict], policy) -> list[MetaRow]:
+def _lignes_metadonnees(signaux: list[dict]) -> list[MetaRow]:
     """La couche Metadonnees s'affiche en tableau categorie / valeur / risque."""
     lignes: list[MetaRow] = []
     for brut in signaux:
         etat = _etat(brut.get("verdict"), brut.get("skip_reason"))
-        impose = _politique_logiciel(str(brut.get("name") or ""), brut.get("value"),
-                                    policy, etat)
-        if impose is not None:
-            etat = impose
         lignes.append(MetaRow(
             label=str(brut.get("label") or brut.get("name") or "—"),
             value=_valeur_tableau(brut),
@@ -230,12 +193,12 @@ def _checks(signaux: list[dict]) -> list[CheckRow]:
     return lignes
 
 
-def _couche(numero: int, brut: dict, policy) -> Layer:
+def _couche(numero: int, brut: dict) -> Layer:
     signaux_bruts = [s for s in (brut.get("signals") or []) if isinstance(s, dict)]
     en_tableau = brut.get("name") == "metadata"
 
-    signaux = [] if en_tableau else [_signal(s, policy) for s in signaux_bruts]
-    tableau = _lignes_metadonnees(signaux_bruts, policy) if en_tableau else []
+    signaux = [] if en_tableau else [_signal(s) for s in signaux_bruts]
+    tableau = _lignes_metadonnees(signaux_bruts) if en_tableau else []
     diffs = _diffs(signaux_bruts)
     checks = _checks(signaux_bruts)
 
@@ -273,11 +236,11 @@ def _couche(numero: int, brut: dict, policy) -> Layer:
     return couche
 
 
-def build_report(data: dict, policy: dict | None = None) -> Report:
+def build_report(data: dict) -> Report:
     document = data.get("document") or {}
     couches_brutes = [c for c in (document.get("layers") or []) if isinstance(c, dict)]
 
-    layers = [_couche(i, brut, policy) for i, brut in enumerate(couches_brutes, start=1)]
+    layers = [_couche(i, brut) for i, brut in enumerate(couches_brutes, start=1)]
 
     cle = str(document.get("verdict") or "").lower()
     etiquette = VERDICTS_DOCUMENT.get(cle, "Indéterminé")

@@ -23,7 +23,7 @@ from __future__ import annotations
 import re
 
 from .model import CheckRow, DiffRow, Layer, MetaRow, Report, Severity, Signal, State
-from .policy import FAMILY_BY_KEY, classify, default_policy
+from .policy import FAMILY_BY_KEY, classify
 
 # Libellés métier des champs renvoyés dans `changed_fields`.
 FIELD_LABELS = {
@@ -127,8 +127,9 @@ def _build_diffs(changed_fields) -> list[DiffRow]:
 # Réglages métier — seuils, pondérations et traductions vivent ici.
 # --------------------------------------------------------------------------
 
-# Le catalogue des logiciels et leur niveau de risque vit dans flair/policy.py,
-# pour être réglable depuis le panneau d'options de la démo.
+# Le catalogue des logiciels vit dans flair/policy.py. Il n'est utilisé que par
+# ce lecteur historique : l'ancien format ne renvoyait que des codes d'anomalie,
+# sans niveau de risque. Le nouveau format fournit le sien, et le front s'y tient.
 
 # Pondération de chaque couche API dans le score global (0-1).
 LAYER_WEIGHTS = {
@@ -553,7 +554,7 @@ def _pdf_digits(value) -> str:
     return "".join(c for c in str(value or "") if c.isdigit())[:14]
 
 
-def _tool_row(label: str, value, policy) -> MetaRow:
+def _tool_row(label: str, value) -> MetaRow:
     """Ligne « logiciel », classée selon la politique de risque configurée.
 
     Un éditeur simplement non reconnu n'est jamais signalé : la liste des
@@ -562,11 +563,11 @@ def _tool_row(label: str, value, policy) -> MetaRow:
     """
     if not value:
         return MetaRow(label, "absent", State.NA)
-    etat, note = classify(value, policy)
+    etat, note = classify(value)
     return MetaRow(label, str(value), etat, note)
 
 
-def _build_metadata(api: dict, file_type: str, policy=None) -> Layer:
+def _build_metadata(api: dict, file_type: str) -> Layer:
     """Couche 2 — affichée sous forme de tableau catégorie / information / risque."""
     raw = api.get("metadata") or {}
     meta = ((raw.get("signals") or {}).get("metadata")) or {}
@@ -583,8 +584,8 @@ def _build_metadata(api: dict, file_type: str, policy=None) -> Layer:
     # fichier : c'est là qu'une retouche se voit, d'où le libellé « modification ».
     producer = creation.get("producer") or editing.get("software")
 
-    ligne_creation = _tool_row("Logiciel de création", creator, policy)
-    ligne_modif = _tool_row("Logiciel de modification", producer, policy)
+    ligne_creation = _tool_row("Logiciel de création", creator)
+    ligne_modif = _tool_row("Logiciel de modification", producer)
 
     # Le moteur signale un outil à risque sans dire lequel. Si aucune famille
     # surveillée ne reconnaît les logiciels déclarés, on impute l'alerte au
@@ -593,7 +594,7 @@ def _build_metadata(api: dict, file_type: str, policy=None) -> Layer:
         ligne_creation.state, ligne_modif.state
     ):
         famille = FAMILY_BY_KEY["retouche"]
-        niveau = (policy or default_policy()).get("retouche", famille.default)
+        niveau = famille.default
         if niveau != State.NA and producer:
             ligne_modif = MetaRow(
                 "Logiciel de modification", str(producer), niveau, famille.note
@@ -1085,7 +1086,7 @@ def _global_score(api: dict) -> int:
     return max(0, min(100, round(worst * 100)))
 
 
-def build_report(data: dict, policy: dict | None = None) -> Report:
+def build_report(data: dict) -> Report:
     """Point d'entrée unique. Aiguille vers le lecteur correspondant au format reçu.
 
     Les deux formats coexistent durablement : un document analysé avant la
@@ -1095,11 +1096,11 @@ def build_report(data: dict, policy: dict | None = None) -> Report:
     from . import adapter_v2
 
     if adapter_v2.est_format_v2(data):
-        return adapter_v2.build_report(data, policy)
-    return _build_report_legacy(data, policy)
+        return adapter_v2.build_report(data)
+    return _build_report_legacy(data)
 
 
-def _build_report_legacy(data: dict, policy: dict | None = None) -> Report:
+def _build_report_legacy(data: dict) -> Report:
     """Point d'entrée : réponse brute de l'API -> objet Report affichable."""
     document = data.get("document") or {}
     debug = data.get("debug") or {}
@@ -1114,7 +1115,7 @@ def _build_report_legacy(data: dict, policy: dict | None = None) -> Report:
 
     layers = [
         _build_history(api, file_type),
-        _build_metadata(api, file_type, policy),
+        _build_metadata(api, file_type),
         _build_twodoc(api, checks_twodoc),
         _build_ai_media(api, document, debug, file_type),
         _build_coherence(api, debug, file_type, checks_autres),

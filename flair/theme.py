@@ -210,23 +210,6 @@ body {
 .dropzone-notice { font-size:.78rem; color:var(--accent); text-align:center;
   padding-top:8px; }
 
-/* ---------- panneau d'options ---------- */
-.optpanel { overflow:hidden; }
-.optpanel-head { padding:12px 18px; cursor:pointer; user-select:none;
-  transition:background .2s; }
-.optpanel-head:hover { background:var(--accent-soft); }
-.optpanel-title { font-family:'IBM Plex Mono',monospace; font-size:.68rem;
-  letter-spacing:.2em; text-transform:uppercase; font-weight:500; }
-.optpanel-body { border-top:1px solid var(--line); padding:16px 18px;
-  background:#FCFCFA; gap:0; }
-.optrow { padding:11px 0; border-bottom:1px dashed var(--line); }
-.optrow:last-child { border-bottom:none; }
-.optname { font-size:.85rem; font-weight:500; }
-.optexamples { font-size:.74rem; color:var(--ink-2); }
-.optselect { min-width:132px; }
-.optselect .q-field__control { font-family:'IBM Plex Mono',monospace;
-  font-size:.75rem; background:var(--card); }
-
 /* ---------- comparaison avant / après ---------- */
 .difflegend { padding:4px 0 10px 0; border-bottom:1px solid var(--line);
   margin-bottom:10px; }
