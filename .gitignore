@@ -23,3 +23,8 @@ desktop.ini
 .vscode/
 .idea/
 *.swp
+
+# Base locale des retours utilisateurs (SQLite)
+*.db
+*.sqlite
+*.sqlite3
