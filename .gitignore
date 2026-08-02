@@ -1,0 +1,30 @@
+# Environnement Python — 161 Mo, se reconstruit avec `pip install -r requirements.txt`
+venv/
+.venv/
+env/
+
+# Caches Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Secrets — la clé API ne doit JAMAIS être versionnée
+.env
+.env.*
+*.pem
+*.key
+
+# Systèmes de fichiers
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Éditeurs
+.vscode/
+.idea/
+*.swp
+
+# Base locale des retours utilisateurs (SQLite)
+*.db
+*.sqlite
+*.sqlite3

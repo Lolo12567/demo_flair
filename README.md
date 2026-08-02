@@ -4,6 +4,35 @@ Interface web de démonstration du moteur d'analyse forensique documentaire FLAI
 
 ---
 
+## 🗂 Organisation du code
+
+| Fichier | Rôle |
+|---|---|
+| `app.py` | Point d'entrée : appel API, structure de la page, orchestration |
+| `flair/theme.py` | Tout le CSS |
+| `flair/model.py` | Le « modèle de vue » : ce que l'interface sait afficher |
+| `flair/adapter.py` | **Traduit la réponse de l'API vers le modèle de vue** |
+| `flair/components.py` | Les briques d'interface (carte de signal, couche, verdict) |
+
+> ⚠️ **Quand l'API change, il n'y a qu'un seul fichier à modifier : `flair/adapter.py`.**
+> L'interface ne connaît jamais le format de l'API.
+
+### Les 5 couches affichées
+
+| # | Couche de la démo | Couche(s) API correspondante(s) |
+|---|---|---|
+| 1 | Historique & modifications | `pdf_structure` |
+| 2 | Métadonnées | `metadata` + `strings` |
+| 3 | 2D-DOC & QR code | `qr_2ddoc` |
+| 4 | Images générées par IA | `ai_media` |
+| 5 | Cohérence sémantique | `coherence` |
+
+Chaque couche contient des **signaux** au format unifié : pastille de couleur
+(🟢 vérifié · 🟠 suspect · 🔴 fraude · ⚪ non applicable / à venir), badge de
+sévérité, verdict en une phrase, détails repliés.
+
+---
+
 ## 📋 Prérequis
 
 - **Système** : Windows 10/11 (8 Go de RAM suffisent amplement, l'appli est légère)
@@ -135,15 +164,34 @@ Ouvre ton navigateur et va sur :
 | `FLAIR_API_URL` | `https://api.myflair.app/v1/analyze` | URL de l'API FLAIR |
 | `FLAIR_API_KEY` | *(vide)* | **⚠️ OBLIGATOIRE** — Ta clé d'accès à l'API |
 | `PORT` | `8080` | Port du serveur web |
+| `FLAIR_RELOAD` | `0` | Mets `1` en développement : la page se recharge toute seule à chaque modification du code |
+
+---
+
+## 🔁 Développement — voir ses changements en direct
+
+Avec `FLAIR_RELOAD=1`, tu n'as plus besoin de redémarrer à chaque modification :
+tu enregistres un fichier, la page se rafraîchit toute seule dans le navigateur.
+
+```powershell
+$env:FLAIR_API_URL = "https://api.myflair.app/v1/analyze"
+$env:FLAIR_API_KEY = "ta_cle"
+$env:FLAIR_RELOAD  = "1"
+python app.py
+```
+
+À laisser à `0` (ou non défini) en démo client et dans Docker.
 
 ---
 
 ## 🧪 Utilisation
 
 1. Sur la page d'accueil, glisse-dépose un document (PDF, JPEG, PNG) ou clique pour en sélectionner un.
-2. Le pipeline d'analyse se lance automatiquement — 8 couches forensiques s'exécutent.
-3. Consulte le verdict final, le score de risque et le détail de chaque couche.
-4. Clique sur **"Réponse JSON de l'API"** en bas pour voir la réponse brute.
+2. Le pipeline d'analyse se lance automatiquement — 5 couches de détection s'exécutent.
+3. En haut, le **verdict global** : la raison principale en une phrase + le score de risque.
+4. En dessous, les **5 couches**. Celles qui portent une alerte s'ouvrent automatiquement ;
+   les autres se déplient au clic. Chaque signal a un bloc **« Détails »** repliable.
+5. Clique sur **"Réponse JSON de l'API"** en bas pour voir la réponse brute.
 
 ---
 
@@ -171,4 +219,5 @@ Si Docker Desktop te semble lourd, préfère l'**Option 2 (sans Docker)**.
 | `docker` n'est pas reconnu | Redémarre ton PC après l'installation de Docker Desktop |
 | Erreur `401 Unauthorized` | Vérifie que `FLAIR_API_KEY` contient la bonne clé (sans espace) |
 | Erreur `Connection refused` | Vérifie que l'URL `FLAIR_API_URL` est correcte |
+| `CERTIFICATE_VERIFY_FAILED` | Un antivirus (Avast, Kaspersky…) ou un proxy d'entreprise inspecte le HTTPS. `truststore` règle le problème — vérifie qu'il est installé : `pip install truststore`. Si `pip` échoue lui aussi pour la même raison : `pip install --cert <chemin_du_bundle.pem> truststore` |
 | Le navigateur affiche une page blanche | Attends 5-10 secondes, le serveur démarre doucement |
