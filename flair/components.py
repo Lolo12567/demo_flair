@@ -377,22 +377,20 @@ def verdict_card(report: Report) -> None:
 
     with ui.column().classes(f"panel verdict verdict-{tone} w-full p-6 gap-5 fade-in"):
         with ui.row().classes("w-full items-start justify-between no-wrap gap-6"):
-            with ui.column().classes("gap-2"):
-                ui.label(report.verdict_label).classes("verdict-word").style(
-                    f"color:{color}"
-                )
-                ui.label(report.headline).classes("verdict-headline")
+            ui.label(report.verdict_label).classes("verdict-word").style(
+                f"color:{color}"
+            )
             ui.element("div").classes(f"dot dot-{tone}").style(
                 "width:16px; height:16px; margin-top:10px"
             )
 
-        if report.reasons:
-            _bullet_list(report.reasons)
-
-        if report.summary and report.summary != report.headline:
+        # Une seule phrase, celle du moteur. Le détail par signal reste dans
+        # les couches ci-dessous — le bandeau ne le répète plus.
+        texte = report.summary or report.headline
+        if texte:
             with ui.column().classes("engine-summary w-full gap-1"):
                 ui.label("Synthèse du moteur").classes("kpi-label")
-                ui.label(report.summary).classes("engine-summary-text")
+                ui.label(texte).classes("engine-summary-text")
 
         if report.deduplicated:
             with ui.row().classes("dedup-banner w-full items-center gap-3 no-wrap"):

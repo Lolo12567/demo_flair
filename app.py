@@ -38,10 +38,16 @@ print(f"[flair] base de retours : {feedback.init()}")
 API_URL = os.getenv("FLAIR_API_URL", "https://api.myflair.app/v1/analyze")
 API_KEY = os.getenv("FLAIR_API_KEY", "")
 
+# Le formulaire de retour s'affiche et s'enregistre toujours. Ce réglage décide
+# seulement s'il *bloque* le dépôt d'un nouveau document tant qu'on n'a pas
+# répondu. Désactivé pour les tests internes, à passer à 1 pour de vrais
+# utilisateurs — c'est ce qui garantit le taux de réponse.
+RETOUR_BLOQUANT = os.getenv("FLAIR_RETOUR_BLOQUANT", "0") == "1"
+
 # Squelettes affichés pendant l'attente de la réponse (mêmes noms que l'adapter).
 PENDING_LAYERS = [
     (1, "Historique & modifications", "Enregistrements successifs · différences de contenu"),
-    (2, "Métadonnées", "Logiciel · appareil · dates · polices · calques"),
+    (2, "Métadonnées", "Logiciel de création et de modification · dates"),
     (3, "2D-DOC & QR code", "Lecture de l'ancre cryptographique · recoupement"),
     (4, "Images générées par IA", "Modèle générateur · deepfake · photo d'écran"),
     (5, "Cohérence", "Recoupement des données du document par IA"),
@@ -227,8 +233,7 @@ def main_page():
                 with layers_slot:
                     fc.layer_block(layer, open_=layer.alert_count > 0)
 
-            # Retour obligatoire : la zone de dépôt reste verrouillée jusqu'à la réponse.
-            verrouiller(True)
+            verrouiller(RETOUR_BLOQUANT)
             with feedback_slot:
                 fc.feedback_form(
                     filename=filename,

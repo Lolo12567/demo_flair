@@ -11,7 +11,7 @@ migration rejouent leur analyse telle qu'elle avait ete stockee.
 from __future__ import annotations
 
 from .model import (CheckRow, DiffRow, Layer, MetaRow, Report, Severity, Signal,
-                    State)
+                    State, worst_state)
 
 # Verdict renvoye par l'API -> etat affiche.
 ETATS = {
@@ -43,6 +43,28 @@ VERDICTS_DOCUMENT = {
     "low": "Risque faible",
     "clean": "Risque faible",
 }
+
+# Reformulations : quelques codes meritent une phrase plus parlante, ou un
+# niveau de risque que le moteur ne leur donne pas encore.
+#   code -> (etat impose ou None pour garder celui de l'API, phrase affichee)
+REFORMULATIONS: dict[str, tuple[State | None, str]] = {
+    "qr_without_2ddoc": (
+        State.SUSPECT,
+        "Un code est présent sur le document, mais il n'est pas lisible comme "
+        "2D-Doc — rien ne permet d'en vérifier la signature.",
+    ),
+}
+
+# Couche Métadonnées : on ne garde que les logiciels et les dates. Le reste
+# (polices, prise de vue, dimensions) alourdit le tableau sans porter de
+# décision. Un signal inconnu est conservé par défaut.
+METADONNEES_ECARTEES = ("fonts", "capture", "dimensions", "technical", "page_count")
+
+# Couche Cohérence : un seul bloc, celui qui récapitule et signale les
+# incohérences. Les contrôles unitaires (clés IBAN, SIREN, SIRET, recoupements)
+# sont déjà repris dans sa synthèse — les afficher en plus dilue le message.
+# Si ce bloc est absent de la réponse, on retombe sur les autres.
+COHERENCE_CONSERVES = ("ai_coherence",)
 
 MARQUEURS_ECHEC = (
     "indisponible", "non parsable", "unparsable", "erreur", "error",
@@ -132,6 +154,13 @@ def _signal(brut: dict) -> Signal:
     etat = _etat(brut.get("verdict"), motif)
 
     phrase = brut.get("description") or brut.get("value") or motif or brut.get("label")
+
+    reformulation = REFORMULATIONS.get(str(brut.get("code") or ""))
+    if reformulation:
+        etat_impose, phrase = reformulation
+        if etat_impose is not None:
+            etat = etat_impose
+
     return Signal(
         title=str(brut.get("label") or brut.get("name") or "Signal").upper(),
         state=etat,
@@ -142,10 +171,32 @@ def _signal(brut: dict) -> Signal:
     )
 
 
+def _est_signal_modifications(brut: dict) -> bool:
+    """Le signal qui porte les différences de contenu entre deux versions."""
+    return str(brut.get("name") or "") == "content_changes" or "changed_fields" in brut
+
+
+def _neutraliser(signal: Signal) -> Signal:
+    """Un signal de modification sans valeur d'origine n'est pas une alerte.
+
+    Le moteur affirme que le texte a changé, mais ne fournit rien à comparer :
+    on l'indique sans le compter comme anomalie, plutôt que de peindre le
+    document en rouge sur une affirmation invérifiable.
+    """
+    signal.state = State.NA
+    signal.severity = Severity.NA
+    signal.verdict = ("Des modifications sont signalées, mais aucune valeur "
+                      "d'origine n'est disponible : rien à comparer.")
+    signal.bullets = []
+    return signal
+
+
 def _lignes_metadonnees(signaux: list[dict]) -> list[MetaRow]:
     """La couche Metadonnees s'affiche en tableau categorie / valeur / risque."""
     lignes: list[MetaRow] = []
     for brut in signaux:
+        if str(brut.get("name") or "").lower() in METADONNEES_ECARTEES:
+            continue
         etat = _etat(brut.get("verdict"), brut.get("skip_reason"))
         lignes.append(MetaRow(
             label=str(brut.get("label") or brut.get("name") or "—"),
@@ -197,22 +248,62 @@ def _couche(numero: int, brut: dict) -> Layer:
     signaux_bruts = [s for s in (brut.get("signals") or []) if isinstance(s, dict)]
     en_tableau = brut.get("name") == "metadata"
 
-    signaux = [] if en_tableau else [_signal(s) for s in signaux_bruts]
+    # La couche Cohérence ne montre que son bloc de synthèse.
+    if brut.get("name") == "coherence":
+        recap = [s for s in signaux_bruts
+                 if str(s.get("name") or "") in COHERENCE_CONSERVES]
+        signaux_bruts = recap or signaux_bruts
+
+    # Une modification n'est montrée que si le moteur fournit la valeur d'origine
+    # ET la valeur finale. Sans point de comparaison, il n'y a rien à opposer :
+    # on n'affiche pas la ligne, et on ne signale pas la modification.
+    diffs = [d for d in _diffs(signaux_bruts) if d.before and d.after]
+    sans_comparaison = (
+        any(_est_signal_modifications(s) for s in signaux_bruts) and not diffs
+    )
+
+    signaux = [] if en_tableau else [
+        _neutraliser(_signal(s)) if sans_comparaison and _est_signal_modifications(s)
+        else _signal(s)
+        for s in signaux_bruts
+    ]
     tableau = _lignes_metadonnees(signaux_bruts) if en_tableau else []
-    diffs = _diffs(signaux_bruts)
     checks = _checks(signaux_bruts)
 
-    # Le resume de la couche : le signal le plus grave, sinon le motif d'exclusion.
-    candidats = [s.verdict for s in signaux if s.state == State.FRAUD]
-    candidats += [s.verdict for s in signaux if s.state == State.SUSPECT]
-    candidats += [r.note or f"{r.label} : {r.value}" for r in tableau
-                  if r.state in (State.FRAUD, State.SUSPECT)]
+    # Un tableau vidé par le filtrage ne doit pas laisser la couche muette.
+    if en_tableau and not tableau and signaux_bruts:
+        tableau = [MetaRow(
+            label="Logiciel et dates",
+            value="aucune métadonnée exploitable",
+            state=State.NA,
+        )]
+
+    # Le résumé vient des signaux bruts, avant tout filtrage d'affichage :
+    # une ligne masquée dans le tableau ne doit pas faire disparaître la raison
+    # pour laquelle le moteur a classé la couche.
+    def _phrase(s: dict) -> str:
+        reformulation = REFORMULATIONS.get(str(s.get("code") or ""))
+        if reformulation:
+            return reformulation[1]
+        return str(s.get("description") or s.get("value")
+                   or s.get("skip_reason") or s.get("label") or "—")
+
+    def _niveau(s: dict) -> State:
+        if sans_comparaison and _est_signal_modifications(s):
+            return State.NA
+        reformulation = REFORMULATIONS.get(str(s.get("code") or ""))
+        if reformulation and reformulation[0] is not None:
+            return reformulation[0]
+        return _etat(s.get("verdict"), s.get("skip_reason"))
+
+    candidats = [_phrase(s) for s in signaux_bruts if _niveau(s) == State.FRAUD]
+    candidats += [_phrase(s) for s in signaux_bruts if _niveau(s) == State.SUSPECT]
     if candidats:
         resume = candidats[0]
     elif brut.get("skip_reason"):
         motif = str(brut["skip_reason"]).strip()
         resume = motif[:1].upper() + motif[1:]
-    elif signaux or tableau:
+    elif signaux_bruts:
         resume = "Aucune anomalie relevée sur cette couche"
     else:
         resume = str(brut.get("description") or "—")
@@ -231,8 +322,25 @@ def _couche(numero: int, brut: dict) -> Layer:
         external_api=bool(brut.get("external_api_call")),
         score=None,
     )
-    # Le verdict de la couche est celui du moteur, pas une agregation maison.
-    couche.state_override = _etat(brut.get("verdict"), brut.get("skip_reason"))
+    # Le verdict de la couche est celui du moteur. Seule exception : un signal
+    # reformulé auquel on impose un niveau que l'API ne lui donne pas encore
+    # (cf. REFORMULATIONS) doit faire remonter la couche avec lui, sinon on
+    # affiche une alerte sous un en-tête neutre.
+    etat_couche = _etat(brut.get("verdict"), brut.get("skip_reason"))
+    imposes = [
+        REFORMULATIONS[str(s.get("code") or "")][0]
+        for s in signaux_bruts
+        if str(s.get("code") or "") in REFORMULATIONS
+        and REFORMULATIONS[str(s.get("code") or "")][0] is not None
+    ]
+    if sans_comparaison:
+        # On vient de neutraliser un signal : forcer le verdict du moteur
+        # afficherait une couche rouge dont plus rien ne justifie la couleur.
+        couche.state_override = worst_state([_niveau(s) for s in signaux_bruts])
+    elif imposes:
+        couche.state_override = worst_state([etat_couche, *imposes])
+    else:
+        couche.state_override = etat_couche
     return couche
 
 
