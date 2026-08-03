@@ -135,6 +135,9 @@ class Layer:
     duration_ms: int = 0
     external_api: bool = False
     score: float | None = None
+    # Une couche sans détail à montrer n'est pas dépliable : pas de chevron,
+    # pas de corps. On affiche son verdict, rien de plus.
+    depliable: bool = True
     # Verdict fourni par le moteur. Quand il est présent, il fait foi : on
     # n'agrège pas soi-même ce que l'API a déjà tranché.
     state_override: State | None = None

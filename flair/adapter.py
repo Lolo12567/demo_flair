@@ -692,6 +692,27 @@ def _is_twodoc_check(row: CheckRow) -> bool:
 
 
 def _build_twodoc(api: dict, checks: list[CheckRow]) -> Layer:
+    # Module non fiable cote moteur : la couche reste visible, sans resultat.
+    raw_qr = api.get("qr_2ddoc") or {}
+    return Layer(
+        number=3,
+        key="qr_2ddoc",
+        name="2D-DOC & QR code",
+        subtitle=_subtitle(raw_qr, "Lecture de l'ancre cryptographique"),
+        headline="En cours de développement",
+        signals=[Signal(
+            title="MODULE EN COURS DE DÉVELOPPEMENT",
+            state=State.TBU,
+            severity=Severity.NA,
+            verdict="Ce contrôle est en cours de mise au point : ses résultats "
+                    "ne sont pas encore affichés et ne pèsent pas sur le verdict.",
+        )],
+        duration_ms=raw_qr.get("duration_ms") or 0,
+        depliable=False,
+    )
+
+
+def _build_twodoc_ancien(api: dict, checks: list[CheckRow]) -> Layer:
     """Couche 3 — détection de l'ancre, puis recoupement champ par champ.
 
     Les recoupements 2D-Doc sont renvoyés par l'API dans la couche `coherence` ;
@@ -821,6 +842,15 @@ def _c2pa_signature(payload: dict) -> dict | None:
 
 
 def _build_ai_media(api: dict, document: dict, debug: dict, file_type: str) -> Layer:
+    # Couche reduite a son verdict : pas de detail, pas de menu deroulant.
+    couche = _build_ai_media_detaille(api, document, debug, file_type)
+    couche.signals = []
+    couche.depliable = False
+    return couche
+
+
+def _build_ai_media_detaille(api: dict, document: dict, debug: dict,
+                             file_type: str) -> Layer:
     raw = api.get("ai_generated_image") or {}
     payload = raw.get("signals") or {}
     # Les preuves de provenance sont remontées par le moteur dans hidden_content.
@@ -976,6 +1006,7 @@ def _build_coherence(api: dict, debug: dict, file_type: str,
         )],
         duration_ms=raw_coherence.get("duration_ms") or 0,
         external_api=bool(raw_coherence.get("external_api_call")),
+        depliable=False,
     )
 
 

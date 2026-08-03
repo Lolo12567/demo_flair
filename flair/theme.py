@@ -49,6 +49,13 @@ body {
   background:var(--card); }
 .live-dot { width:7px; height:7px; border-radius:50%; background:var(--ok);
   animation:pulse 2.2s infinite; }
+.doc-btn { display:flex !important; align-items:center; gap:7px;
+  border:1px solid var(--accent); border-radius:99px; padding:5px 14px;
+  background:var(--card); color:var(--accent) !important; text-decoration:none !important;
+  font-size:.78rem; font-weight:500; white-space:nowrap;
+  transition:background .2s, color .2s; }
+.doc-btn:hover { background:var(--accent); color:#fff !important; }
+.doc-btn-arrow { font-size:.72rem; }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
 
 /* ---------- en-tête de page ---------- */
@@ -164,6 +171,9 @@ body {
 .layer-head { padding:15px 18px; cursor:pointer; user-select:none;
   transition:background .2s; }
 .layer-head:hover { background:var(--accent-soft); }
+/* Couche sans détail : ni curseur main, ni survol, ni chevron. */
+.layer-head-fixe { cursor:default; }
+.layer-head-fixe:hover { background:transparent; }
 .layer-num { font-family:'IBM Plex Mono',monospace; font-size:.7rem;
   color:var(--line-2); font-weight:500; min-width:24px; }
 .layer-name { font-size:.94rem; font-weight:600; }

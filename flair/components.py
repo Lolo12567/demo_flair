@@ -314,8 +314,9 @@ def layer_block(layer: Layer, *, open_: bool = False) -> None:
     """Une couche : en-tête cliquable + cartes de signaux."""
     tone = layer.state.value
     with ui.column().classes("panel layer w-full gap-0 fade-in"):
+        entete = "layer-head" if layer.depliable else "layer-head layer-head-fixe"
         header = ui.row().classes(
-            "layer-head w-full items-center justify-between no-wrap gap-4"
+            f"{entete} w-full items-center justify-between no-wrap gap-4"
         )
         with header:
             with ui.row().classes("items-center gap-4 no-wrap"):
@@ -332,7 +333,14 @@ def layer_block(layer: Layer, *, open_: bool = False) -> None:
                         f"{layer.alert_count} "
                         + ("signaux" if layer.alert_count > 1 else "signal")
                     ).classes(f"sev {SEVERITY_CLASS[layer.state]}")
-                caret = ui.label("›").classes("caret mono").style("color:var(--ink-2)")
+                if layer.depliable:
+                    caret = ui.label("›").classes("caret mono").style(
+                        "color:var(--ink-2)"
+                    )
+
+        # Sans détail à montrer, la couche s'arrête à son en-tête.
+        if not layer.depliable:
+            return
 
         body = ui.column().classes("layer-body w-full gap-3")
         with body:

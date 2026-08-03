@@ -87,11 +87,17 @@ def main_page():
     with ui.element("div").classes("topbar"):
         with ui.row().classes("topbar-inner w-full items-center justify-between no-wrap"):
             ui.html(theme.LOGO)
-            with ui.element("div").classes("live-badge"):
-                ui.element("div").classes("live-dot")
-                ui.label("api.myflair.app").classes("mono text-xs").style(
-                    "color:var(--ink-2)"
-                )
+            with ui.row().classes("items-center gap-3 no-wrap"):
+                with ui.element("div").classes("live-badge"):
+                    ui.element("div").classes("live-dot")
+                    ui.label("api.myflair.app").classes("mono text-xs").style(
+                        "color:var(--ink-2)"
+                    )
+                with ui.link(
+                    target="https://api.myflair.app/redoc", new_tab=True
+                ).classes("doc-btn"):
+                    ui.label("Documentation")
+                    ui.label("↗").classes("doc-btn-arrow mono")
 
     with ui.column().classes("w-full max-w-4xl mx-auto px-6 pt-14 pb-6 gap-10"):
 

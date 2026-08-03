@@ -101,16 +101,17 @@ REFORMULATIONS: dict[str, tuple[State | None, str]] = {
     ),
 }
 
-# Couche Métadonnées : on ne garde que les logiciels et les dates. Le reste
-# (polices, prise de vue, dimensions) alourdit le tableau sans porter de
-# décision. Un signal inconnu est conservé par défaut.
-METADONNEES_ECARTEES = ("fonts", "capture", "dimensions", "technical", "page_count")
+# Couche Métadonnées : liste blanche. Seuls ces quatre signaux sont affichés ;
+# tout le reste (prise de vue, polices, dimensions) est écarté.
+METADONNEES_CONSERVEES = (
+    "creation_software", "editing_software", "creation_date", "modification_date",
+)
 
-# Couche Cohérence : un seul bloc, celui qui récapitule et signale les
-# incohérences. Les contrôles unitaires (clés IBAN, SIREN, SIRET, recoupements)
-# sont déjà repris dans sa synthèse — les afficher en plus dilue le message.
-# Si ce bloc est absent de la réponse, on retombe sur les autres.
-COHERENCE_CONSERVES = ("ai_coherence",)
+# Couches réduites à leur verdict : ni détail, ni menu déroulant.
+COUCHES_VERDICT_SEUL = ("ai_generated_image",)
+
+# Couches dont le module n'est pas encore exploitable.
+COUCHES_EN_CHANTIER = ("qr_2ddoc", "coherence")
 
 # Outils de conversion, de fusion ou d'édition PDF. Leur présence sur un
 # document justificatif est signalée en modéré. Tout autre logiciel — même
@@ -161,8 +162,17 @@ def _nom_logiciel(valeur) -> str:
     return texte.strip(" -,;") or str(valeur or "")
 
 
-def _etat_logiciel(valeur) -> tuple[State, str]:
-    """Niveau de risque d'un logiciel, et phrase associée."""
+def _etat_logiciel(valeur, etat_api: State, phrase_api: str) -> tuple[State, str]:
+    """Niveau de risque d'un logiciel.
+
+    Une alerte forte du moteur (Photoshop, GIMP…) est conservée telle quelle.
+    En revanche son « logiciel non reconnu », qui n'est qu'une absence de
+    preuve, est remplacé par notre liste d'outils de conversion PDF : un
+    éditeur inconnu ne doit pas déclencher d'alerte.
+    """
+    if etat_api == State.FRAUD:
+        return etat_api, phrase_api
+
     minuscules = _sans_accent(valeur)
     for motif in LOGICIELS_SIGNALES:
         if motif in minuscules:
@@ -301,7 +311,7 @@ def _lignes_metadonnees(signaux: list[dict]) -> list[MetaRow]:
     lignes: list[MetaRow] = []
     for brut in signaux:
         cle = _cle(brut)
-        if cle in METADONNEES_ECARTEES:
+        if cle not in METADONNEES_CONSERVEES:
             continue
 
         etat = _etat(brut.get("verdict"), brut.get("skip_reason"))
@@ -309,10 +319,9 @@ def _lignes_metadonnees(signaux: list[dict]) -> list[MetaRow]:
         note = str(brut.get("description") or "")
 
         if cle in ("creation_software", "editing_software") and brut.get("value"):
-            # On affiche le nom du logiciel, pas le commentaire du moteur, et on
-            # ne signale que les outils de conversion ou d'édition PDF.
+            # On affiche le nom du logiciel, pas le commentaire du moteur.
             valeur = _nom_logiciel(brut["value"])
-            etat, note = _etat_logiciel(brut["value"])
+            etat, note = _etat_logiciel(brut["value"], etat, note)
         elif "date" in cle or "date" in _sans_accent(brut.get("label")):
             valeur = _date_lisible(brut.get("value")) or valeur
 
@@ -384,18 +393,28 @@ def _couche_en_chantier(numero: int, brut: dict) -> Layer:
         external_api=bool(brut.get("external_api_call")),
     )
     couche.state_override = State.TBU
+    couche.depliable = False
     return couche
 
 
 def _couche(numero: int, brut: dict) -> Layer:
     signaux_bruts = [s for s in (brut.get("signals") or []) if isinstance(s, dict)]
-    en_tableau = _cle(brut) == "metadata"
+    cle_couche = _cle(brut)
+    en_tableau = cle_couche == "metadata"
 
-    # La couche Cohérence reste visible mais n'affiche encore aucun résultat :
-    # le module côté moteur n'est pas fiable, et le laisser remonter des
-    # constats fausserait le verdict. À retirer quand l'API sera affinée.
-    if _cle(brut) == "coherence":
+    # Modules encore en mise au point : la couche reste visible, sans résultat,
+    # et ne pèse pas sur le verdict.
+    if cle_couche in COUCHES_EN_CHANTIER:
         return _couche_en_chantier(numero, brut)
+
+    # Métadonnées : les signaux hors liste blanche sont ignorés, pas seulement
+    # masqués. Ils ne doivent donc alimenter ni le tableau, ni le résumé de la
+    # couche — sinon l'en-tête annonce une raison introuvable en dessous.
+    metadonnees_filtrees = False
+    if en_tableau:
+        retenus = [s for s in signaux_bruts if _cle(s) in METADONNEES_CONSERVEES]
+        metadonnees_filtrees = len(retenus) != len(signaux_bruts)
+        signaux_bruts = retenus
 
     # Une modification n'est montrée que si le moteur fournit la valeur d'origine
     # ET la valeur finale. Sans point de comparaison, il n'y a rien à opposer :
@@ -439,8 +458,16 @@ def _couche(numero: int, brut: dict) -> Layer:
             return reformulation[0]
         return _etat(s.get("verdict"), s.get("skip_reason"))
 
-    candidats = [_phrase(s) for s in signaux_bruts if _niveau(s) == State.FRAUD]
-    candidats += [_phrase(s) for s in signaux_bruts if _niveau(s) == State.SUSPECT]
+    if en_tableau:
+        # Le tableau porte l'état final des lignes (nom du logiciel, liste des
+        # outils PDF) : c'est lui qui fait foi, pas le verdict brut du moteur.
+        candidats = [r.note or f"{r.label} : {r.value}" for r in tableau
+                     if r.state == State.FRAUD]
+        candidats += [r.note or f"{r.label} : {r.value}" for r in tableau
+                      if r.state == State.SUSPECT]
+    else:
+        candidats = [_phrase(s) for s in signaux_bruts if _niveau(s) == State.FRAUD]
+        candidats += [_phrase(s) for s in signaux_bruts if _niveau(s) == State.SUSPECT]
     if candidats:
         resume = candidats[0]
     elif brut.get("skip_reason"):
@@ -451,19 +478,24 @@ def _couche(numero: int, brut: dict) -> Layer:
     else:
         resume = str(brut.get("description") or "—")
 
+    # Certaines couches se résument à leur verdict : on garde le résumé, on
+    # retire tout le détail, et l'en-tête n'est plus dépliable.
+    verdict_seul = cle_couche in COUCHES_VERDICT_SEUL
+
     couche = Layer(
         number=numero,
-        key=_cle(brut) or f"couche_{numero}",
+        key=cle_couche or f"couche_{numero}",
         name=str(brut.get("label") or brut.get("name") or f"Couche {numero}"),
         subtitle=str(brut.get("description") or ""),
         headline=resume,
-        signals=signaux,
-        table=tableau,
-        diffs=diffs,
-        checks=checks,
+        signals=[] if verdict_seul else signaux,
+        table=[] if verdict_seul else tableau,
+        diffs=[] if verdict_seul else diffs,
+        checks=[] if verdict_seul else checks,
         duration_ms=brut.get("duration_ms") or 0,
         external_api=bool(brut.get("external_api_call")),
         score=None,
+        depliable=not verdict_seul,
     )
     # Le verdict de la couche est celui du moteur. Seule exception : un signal
     # reformulé auquel on impose un niveau que l'API ne lui donne pas encore
@@ -476,10 +508,15 @@ def _couche(numero: int, brut: dict) -> Layer:
         if str(s.get("code") or "") in REFORMULATIONS
         and REFORMULATIONS[str(s.get("code") or "")][0] is not None
     ]
-    if sans_comparaison:
+    if en_tableau:
+        # L'état de la couche suit les lignes affichées : un signal écarté ou
+        # requalifié ne doit pas laisser un en-tête coloré sans justification.
+        couche.state_override = worst_state([r.state for r in tableau] or [State.NA])
+    elif sans_comparaison:
         # On vient de neutraliser un signal : forcer le verdict du moteur
         # afficherait une couche rouge dont plus rien ne justifie la couleur.
-        couche.state_override = worst_state([_niveau(s) for s in signaux_bruts])
+        couche.state_override = worst_state(
+            [_niveau(s) for s in signaux_bruts] or [State.NA])
     elif imposes:
         couche.state_override = worst_state([etat_couche, *imposes])
     else:
