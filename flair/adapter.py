@@ -957,6 +957,30 @@ def _inconsistencies(layer: dict) -> list[str]:
 
 def _build_coherence(api: dict, debug: dict, file_type: str,
                      checks: list[CheckRow] | None = None) -> Layer:
+    # Le module de cohérence n'est pas encore fiable côté moteur : la couche
+    # reste visible, en gris, sans peser sur le verdict. Même traitement que
+    # dans adapter_v2, pour que l'affichage ne dépende pas de l'âge du document.
+    raw_coherence = api.get("coherence") or {}
+    return Layer(
+        number=5,
+        key="coherence",
+        name="Cohérence",
+        subtitle=_subtitle(raw_coherence, "Recoupement des données du document par IA"),
+        headline="En cours de développement",
+        signals=[Signal(
+            title="MODULE EN COURS DE DÉVELOPPEMENT",
+            state=State.TBU,
+            severity=Severity.NA,
+            verdict="Ce contrôle est en cours de mise au point : ses résultats "
+                    "ne sont pas encore affichés et ne pèsent pas sur le verdict.",
+        )],
+        duration_ms=raw_coherence.get("duration_ms") or 0,
+        external_api=bool(raw_coherence.get("external_api_call")),
+    )
+
+
+def _build_coherence_ancien(api: dict, debug: dict, file_type: str,
+                            checks: list[CheckRow] | None = None) -> Layer:
     raw = api.get("coherence") or {}
     verdict = raw.get("verdict")
     checks = checks or []

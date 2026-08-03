@@ -103,8 +103,8 @@ def main_page():
             ui.label(
                 "Soumettez une pièce justificative — fiche de paie, justificatif de "
                 "domicile, pièce d'identité, facture. Le moteur exécute ses couches "
-                "déterministes, puis n'escalade vers l'IA que si aucune ancre forte "
-                "ne peut être vérifiée."
+                "déterministes, puis n'escalade vers l'IA que si aucune trace claire "
+                "de fraude n'a été identifiée."
             ).classes("hero-sub")
 
         zone = ui.element("div").classes("dropzone")

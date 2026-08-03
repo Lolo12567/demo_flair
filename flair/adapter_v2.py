@@ -10,8 +10,54 @@ migration rejouent leur analyse telle qu'elle avait ete stockee.
 
 from __future__ import annotations
 
+import unicodedata
+
 from .model import (CheckRow, DiffRow, Layer, MetaRow, Report, Severity, Signal,
                     State, worst_state)
+
+# --------------------------------------------------------------------------
+# Identification des couches et des signaux
+#
+# L'API n'envoie plus systématiquement `name`. Quand il manque, on retombe sur
+# le libellé normalisé. C'est un repli, pas une solution : un libellé est fait
+# pour être réécrit, un identifiant non. À supprimer dès que `name` revient.
+# --------------------------------------------------------------------------
+
+CLES_PAR_LIBELLE = {
+    # couches
+    "historique & modifications": "revision_history",
+    "metadonnees": "metadata",
+    "2d-doc & qr code": "qr_2ddoc",
+    "images generees par ia": "ai_generated_image",
+    "coherence": "coherence",
+    # signaux
+    "versions du fichier": "versions",
+    "modifications de contenu": "content_changes",
+    "logiciel de creation": "creation_software",
+    "logiciel de modification": "editing_software",
+    "date de creation": "creation_date",
+    "date de modification": "modification_date",
+    "prise de vue": "capture",
+    "polices": "fonts",
+    "coherence ia": "ai_coherence",
+    "recoupement semantique": "ai_coherence",
+    "empreinte de generateur": "generator_fingerprint",
+    "detection statistique": "generative_model",
+    "code detecte": "code_detected",
+}
+
+
+def _sans_accent(texte) -> str:
+    decompose = unicodedata.normalize("NFKD", str(texte or ""))
+    return "".join(c for c in decompose if not unicodedata.combining(c)).strip().lower()
+
+
+def _cle(brut: dict) -> str:
+    """Identifiant stable d'une couche ou d'un signal."""
+    nom = str(brut.get("name") or "").strip().lower()
+    if nom:
+        return nom
+    return CLES_PAR_LIBELLE.get(_sans_accent(brut.get("label")), "")
 
 # Verdict renvoye par l'API -> etat affiche.
 ETATS = {
@@ -65,6 +111,65 @@ METADONNEES_ECARTEES = ("fonts", "capture", "dimensions", "technical", "page_cou
 # sont déjà repris dans sa synthèse — les afficher en plus dilue le message.
 # Si ce bloc est absent de la réponse, on retombe sur les autres.
 COHERENCE_CONSERVES = ("ai_coherence",)
+
+# Outils de conversion, de fusion ou d'édition PDF. Leur présence sur un
+# document justificatif est signalée en modéré. Tout autre logiciel — même
+# inconnu du moteur — n'est pas signalé : une liste d'éditeurs légitimes est
+# par nature incomplète, et chaque oubli produirait une fausse alerte.
+LOGICIELS_SIGNALES = (
+    "ilovepdf", "smallpdf", "pdf24", "nitro", "foxit", "libreoffice",
+    "google docs", "canva", "cutepdf", "img2pdf",
+    # autres outils de la même famille
+    "sejda", "pdfescape", "soda pdf", "sodapdf", "pdfsam", "pdfelement",
+    "pdftk", "pdfcreator", "dopdf", "bullzip", "print to pdf",
+)
+
+MOIS = ("janvier", "février", "mars", "avril", "mai", "juin", "juillet",
+        "août", "septembre", "octobre", "novembre", "décembre")
+
+
+def _date_lisible(valeur) -> str | None:
+    """« 2026-05-23T08:54:58 » -> « 23 mai 2026 à 08:54 ».
+
+    Accepte aussi le format PDF (« D:20260523085458+02'00' »). Renvoie None si
+    la valeur n'est pas une date plausible, pour ne rien inventer.
+    """
+    chiffres = "".join(c for c in str(valeur or "") if c.isdigit())
+    if len(chiffres) < 8:
+        return None
+    try:
+        annee, mois, jour = int(chiffres[0:4]), int(chiffres[4:6]), int(chiffres[6:8])
+    except ValueError:
+        return None
+    if not (1 <= mois <= 12 and 1 <= jour <= 31 and 1900 <= annee <= 2200):
+        return None
+    date = f"{jour} {MOIS[mois - 1]} {annee}"
+    if len(chiffres) >= 12:
+        heure, minute = int(chiffres[8:10]), int(chiffres[10:12])
+        if heure < 24 and minute < 60:
+            return f"{date} à {heure:02d}:{minute:02d}"
+    return date
+
+
+def _nom_logiciel(valeur) -> str:
+    """Allège les mentions de copyright, qui noient le nom du logiciel."""
+    texte = " ".join(str(valeur or "").split())
+    for separateur in (" - Copyright", " Copyright", " ©", " (c)", " (C)"):
+        position = texte.find(separateur)
+        if position > 0:
+            texte = texte[:position]
+    return texte.strip(" -,;") or str(valeur or "")
+
+
+def _etat_logiciel(valeur) -> tuple[State, str]:
+    """Niveau de risque d'un logiciel, et phrase associée."""
+    minuscules = _sans_accent(valeur)
+    for motif in LOGICIELS_SIGNALES:
+        if motif in minuscules:
+            return State.SUSPECT, ("Outil de conversion ou d'édition PDF : un "
+                                   "document officiel est produit par le système "
+                                   "de gestion de son émetteur.")
+    return State.OK, ""
 
 MARQUEURS_ECHEC = (
     "indisponible", "non parsable", "unparsable", "erreur", "error",
@@ -173,7 +278,7 @@ def _signal(brut: dict) -> Signal:
 
 def _est_signal_modifications(brut: dict) -> bool:
     """Le signal qui porte les différences de contenu entre deux versions."""
-    return str(brut.get("name") or "") == "content_changes" or "changed_fields" in brut
+    return _cle(brut) == "content_changes" or "changed_fields" in brut
 
 
 def _neutraliser(signal: Signal) -> Signal:
@@ -195,15 +300,27 @@ def _lignes_metadonnees(signaux: list[dict]) -> list[MetaRow]:
     """La couche Metadonnees s'affiche en tableau categorie / valeur / risque."""
     lignes: list[MetaRow] = []
     for brut in signaux:
-        if str(brut.get("name") or "").lower() in METADONNEES_ECARTEES:
+        cle = _cle(brut)
+        if cle in METADONNEES_ECARTEES:
             continue
+
         etat = _etat(brut.get("verdict"), brut.get("skip_reason"))
+        valeur = _valeur_tableau(brut)
+        note = str(brut.get("description") or "")
+
+        if cle in ("creation_software", "editing_software") and brut.get("value"):
+            # On affiche le nom du logiciel, pas le commentaire du moteur, et on
+            # ne signale que les outils de conversion ou d'édition PDF.
+            valeur = _nom_logiciel(brut["value"])
+            etat, note = _etat_logiciel(brut["value"])
+        elif "date" in cle or "date" in _sans_accent(brut.get("label")):
+            valeur = _date_lisible(brut.get("value")) or valeur
+
         lignes.append(MetaRow(
             label=str(brut.get("label") or brut.get("name") or "—"),
-            value=_valeur_tableau(brut),
+            value=valeur,
             state=etat,
-            note=str(brut.get("description") or "") if etat in (
-                State.FRAUD, State.SUSPECT) else "",
+            note=note if etat in (State.FRAUD, State.SUSPECT) else "",
         ))
     return lignes
 
@@ -244,15 +361,41 @@ def _checks(signaux: list[dict]) -> list[CheckRow]:
     return lignes
 
 
+def _couche_en_chantier(numero: int, brut: dict) -> Layer:
+    """Une couche affichée mais dont le module n'est pas encore exploitable.
+
+    Elle reste visible pour que l'utilisateur sache qu'elle existe, en gris et
+    sans verdict : rien de ce qu'elle renvoie ne doit peser sur l'analyse.
+    """
+    couche = Layer(
+        number=numero,
+        key=_cle(brut) or f"couche_{numero}",
+        name=str(brut.get("label") or f"Couche {numero}"),
+        subtitle=str(brut.get("description") or ""),
+        headline="En cours de développement",
+        signals=[Signal(
+            title="MODULE EN COURS DE DÉVELOPPEMENT",
+            state=State.TBU,
+            severity=Severity.NA,
+            verdict="Ce contrôle est en cours de mise au point : ses résultats "
+                    "ne sont pas encore affichés et ne pèsent pas sur le verdict.",
+        )],
+        duration_ms=brut.get("duration_ms") or 0,
+        external_api=bool(brut.get("external_api_call")),
+    )
+    couche.state_override = State.TBU
+    return couche
+
+
 def _couche(numero: int, brut: dict) -> Layer:
     signaux_bruts = [s for s in (brut.get("signals") or []) if isinstance(s, dict)]
-    en_tableau = brut.get("name") == "metadata"
+    en_tableau = _cle(brut) == "metadata"
 
-    # La couche Cohérence ne montre que son bloc de synthèse.
-    if brut.get("name") == "coherence":
-        recap = [s for s in signaux_bruts
-                 if str(s.get("name") or "") in COHERENCE_CONSERVES]
-        signaux_bruts = recap or signaux_bruts
+    # La couche Cohérence reste visible mais n'affiche encore aucun résultat :
+    # le module côté moteur n'est pas fiable, et le laisser remonter des
+    # constats fausserait le verdict. À retirer quand l'API sera affinée.
+    if _cle(brut) == "coherence":
+        return _couche_en_chantier(numero, brut)
 
     # Une modification n'est montrée que si le moteur fournit la valeur d'origine
     # ET la valeur finale. Sans point de comparaison, il n'y a rien à opposer :
@@ -310,7 +453,7 @@ def _couche(numero: int, brut: dict) -> Layer:
 
     couche = Layer(
         number=numero,
-        key=str(brut.get("name") or f"couche_{numero}"),
+        key=_cle(brut) or f"couche_{numero}",
         name=str(brut.get("label") or brut.get("name") or f"Couche {numero}"),
         subtitle=str(brut.get("description") or ""),
         headline=resume,
