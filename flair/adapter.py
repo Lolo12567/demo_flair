@@ -692,27 +692,6 @@ def _is_twodoc_check(row: CheckRow) -> bool:
 
 
 def _build_twodoc(api: dict, checks: list[CheckRow]) -> Layer:
-    # Module non fiable cote moteur : la couche reste visible, sans resultat.
-    raw_qr = api.get("qr_2ddoc") or {}
-    return Layer(
-        number=3,
-        key="qr_2ddoc",
-        name="2D-DOC & QR code",
-        subtitle=_subtitle(raw_qr, "Lecture de l'ancre cryptographique"),
-        headline="En cours de développement",
-        signals=[Signal(
-            title="MODULE EN COURS DE DÉVELOPPEMENT",
-            state=State.TBU,
-            severity=Severity.NA,
-            verdict="Ce contrôle est en cours de mise au point : ses résultats "
-                    "ne sont pas encore affichés et ne pèsent pas sur le verdict.",
-        )],
-        duration_ms=raw_qr.get("duration_ms") or 0,
-        depliable=False,
-    )
-
-
-def _build_twodoc_ancien(api: dict, checks: list[CheckRow]) -> Layer:
     """Couche 3 — détection de l'ancre, puis recoupement champ par champ.
 
     Les recoupements 2D-Doc sont renvoyés par l'API dans la couche `coherence` ;
@@ -841,15 +820,7 @@ def _c2pa_signature(payload: dict) -> dict | None:
     return None
 
 
-def _build_ai_media(api: dict, document: dict, debug: dict, file_type: str) -> Layer:
-    # Couche reduite a son verdict : pas de detail, pas de menu deroulant.
-    couche = _build_ai_media_detaille(api, document, debug, file_type)
-    couche.signals = []
-    couche.depliable = False
-    return couche
-
-
-def _build_ai_media_detaille(api: dict, document: dict, debug: dict,
+def _build_ai_media(api: dict, document: dict, debug: dict,
                              file_type: str) -> Layer:
     raw = api.get("ai_generated_image") or {}
     payload = raw.get("signals") or {}
@@ -986,31 +957,6 @@ def _inconsistencies(layer: dict) -> list[str]:
 
 
 def _build_coherence(api: dict, debug: dict, file_type: str,
-                     checks: list[CheckRow] | None = None) -> Layer:
-    # Le module de cohérence n'est pas encore fiable côté moteur : la couche
-    # reste visible, en gris, sans peser sur le verdict. Même traitement que
-    # dans adapter_v2, pour que l'affichage ne dépende pas de l'âge du document.
-    raw_coherence = api.get("coherence") or {}
-    return Layer(
-        number=5,
-        key="coherence",
-        name="Cohérence",
-        subtitle=_subtitle(raw_coherence, "Recoupement des données du document par IA"),
-        headline="En cours de développement",
-        signals=[Signal(
-            title="MODULE EN COURS DE DÉVELOPPEMENT",
-            state=State.TBU,
-            severity=Severity.NA,
-            verdict="Ce contrôle est en cours de mise au point : ses résultats "
-                    "ne sont pas encore affichés et ne pèsent pas sur le verdict.",
-        )],
-        duration_ms=raw_coherence.get("duration_ms") or 0,
-        external_api=bool(raw_coherence.get("external_api_call")),
-        depliable=False,
-    )
-
-
-def _build_coherence_ancien(api: dict, debug: dict, file_type: str,
                             checks: list[CheckRow] | None = None) -> Layer:
     raw = api.get("coherence") or {}
     verdict = raw.get("verdict")
@@ -1175,6 +1121,11 @@ def _build_report_legacy(data: dict) -> Report:
         _build_ai_media(api, document, debug, file_type),
         _build_coherence(api, debug, file_type, checks_autres),
     ]
+
+    # Le detail de chaque couche n'est plus affiche : seule la ligne de verdict
+    # reste. Les signaux continuent d'alimenter le resume et la couleur.
+    for couche in layers:
+        couche.depliable = False
 
     key = str(document.get("verdict") or "").lower()
     label, verdict_state = VERDICT_LABELS.get(key, ("INDÉTERMINÉ", State.NA))

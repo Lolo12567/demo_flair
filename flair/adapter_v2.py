@@ -118,12 +118,6 @@ METADONNEES_INFORMATIVES = {
     "capture_date": "Date de la photo",
 }
 
-# Couches réduites à leur verdict : ni détail, ni menu déroulant.
-COUCHES_VERDICT_SEUL = ("ai_generated_image",)
-
-# Couches dont le module n'est pas encore exploitable.
-COUCHES_EN_CHANTIER = ("qr_2ddoc", "coherence")
-
 # Outils de conversion, de fusion ou d'édition PDF. Leur présence sur un
 # document justificatif est signalée en modéré. Tout autre logiciel — même
 # inconnu du moteur — n'est pas signalé : une liste d'éditeurs légitimes est
@@ -402,42 +396,10 @@ def _checks(signaux: list[dict]) -> list[CheckRow]:
     return lignes
 
 
-def _couche_en_chantier(numero: int, brut: dict) -> Layer:
-    """Une couche affichée mais dont le module n'est pas encore exploitable.
-
-    Elle reste visible pour que l'utilisateur sache qu'elle existe, en gris et
-    sans verdict : rien de ce qu'elle renvoie ne doit peser sur l'analyse.
-    """
-    couche = Layer(
-        number=numero,
-        key=_cle(brut) or f"couche_{numero}",
-        name=str(brut.get("label") or f"Couche {numero}"),
-        subtitle=str(brut.get("description") or ""),
-        headline="En cours de développement",
-        signals=[Signal(
-            title="MODULE EN COURS DE DÉVELOPPEMENT",
-            state=State.TBU,
-            severity=Severity.NA,
-            verdict="Ce contrôle est en cours de mise au point : ses résultats "
-                    "ne sont pas encore affichés et ne pèsent pas sur le verdict.",
-        )],
-        duration_ms=brut.get("duration_ms") or 0,
-        external_api=bool(brut.get("external_api_call")),
-    )
-    couche.state_override = State.TBU
-    couche.depliable = False
-    return couche
-
-
 def _couche(numero: int, brut: dict) -> Layer:
     signaux_bruts = [s for s in (brut.get("signals") or []) if isinstance(s, dict)]
     cle_couche = _cle(brut)
     en_tableau = cle_couche == "metadata"
-
-    # Modules encore en mise au point : la couche reste visible, sans résultat,
-    # et ne pèse pas sur le verdict.
-    if cle_couche in COUCHES_EN_CHANTIER:
-        return _couche_en_chantier(numero, brut)
 
     # Métadonnées : les signaux hors liste blanche sont ignorés, pas seulement
     # masqués. Ils ne doivent donc alimenter ni le tableau, ni le résumé de la
@@ -510,24 +472,19 @@ def _couche(numero: int, brut: dict) -> Layer:
     else:
         resume = str(brut.get("description") or "—")
 
-    # Certaines couches se résument à leur verdict : on garde le résumé, on
-    # retire tout le détail, et l'en-tête n'est plus dépliable.
-    verdict_seul = cle_couche in COUCHES_VERDICT_SEUL
-
     couche = Layer(
         number=numero,
         key=cle_couche or f"couche_{numero}",
         name=str(brut.get("label") or brut.get("name") or f"Couche {numero}"),
         subtitle=str(brut.get("description") or ""),
         headline=resume,
-        signals=[] if verdict_seul else signaux,
-        table=[] if verdict_seul else tableau,
-        diffs=[] if verdict_seul else diffs,
-        checks=[] if verdict_seul else checks,
+        signals=signaux,
+        table=tableau,
+        diffs=diffs,
+        checks=checks,
         duration_ms=brut.get("duration_ms") or 0,
         external_api=bool(brut.get("external_api_call")),
         score=None,
-        depliable=not verdict_seul,
     )
     # Le verdict de la couche est celui du moteur. Seule exception : un signal
     # reformulé auquel on impose un niveau que l'API ne lui donne pas encore
@@ -561,6 +518,11 @@ def build_report(data: dict) -> Report:
     couches_brutes = [c for c in (document.get("layers") or []) if isinstance(c, dict)]
 
     layers = [_couche(i, brut) for i, brut in enumerate(couches_brutes, start=1)]
+    # Le detail de chaque couche n'est plus affiche : on n'en garde que la
+    # ligne de verdict. Les signaux restent calcules, ils alimentent le resume,
+    # la couleur et le compteur d'alertes.
+    for couche in layers:
+        couche.depliable = False
 
     cle = str(document.get("verdict") or "").lower()
     etiquette = VERDICTS_DOCUMENT.get(cle, "Indéterminé")
