@@ -38,6 +38,7 @@ CLES_PAR_LIBELLE = {
     "date de creation": "creation_date",
     "date de modification": "modification_date",
     "prise de vue": "capture",
+    "date de prise de vue": "capture_date",
     "polices": "fonts",
     "coherence ia": "ai_coherence",
     "recoupement semantique": "ai_coherence",
@@ -101,11 +102,21 @@ REFORMULATIONS: dict[str, tuple[State | None, str]] = {
     ),
 }
 
-# Couche Métadonnées : liste blanche. Seuls ces quatre signaux sont affichés ;
-# tout le reste (prise de vue, polices, dimensions) est écarté.
+# Couche Métadonnées : liste blanche, dans l'ordre d'affichage du tableau.
+# Tout le reste (polices, dimensions, format) est écarté.
 METADONNEES_CONSERVEES = (
     "creation_software", "editing_software", "creation_date", "modification_date",
+    "capture", "capture_date",
 )
+
+# Les deux dernières lignes sont purement informatives : elles renseignent
+# l'appareil et la date de la photo quand ils existent. Leur absence ne prouve
+# rien — un PDF ou un scan n'en a jamais — donc elles ne s'affichent jamais en
+# alerte, quel que soit le verdict du moteur.
+METADONNEES_INFORMATIVES = {
+    "capture": "Appareil (photo)",
+    "capture_date": "Date de la photo",
+}
 
 # Couches réduites à leur verdict : ni détail, ni menu déroulant.
 COUCHES_VERDICT_SEUL = ("ai_generated_image",)
@@ -160,6 +171,16 @@ def _nom_logiciel(valeur) -> str:
         if position > 0:
             texte = texte[:position]
     return texte.strip(" -,;") or str(valeur or "")
+
+
+def _appareil(brut: dict) -> str:
+    """Marque et modèle de l'appareil ayant pris la photo, s'ils sont connus."""
+    if brut.get("value"):
+        return _txt(brut["value"])
+    details = brut.get("details") or {}
+    morceaux = [str(details[cle]) for cle in ("camera_make", "camera_model")
+                if details.get(cle)]
+    return " ".join(morceaux) if morceaux else "non renseigné"
 
 
 def _etat_logiciel(valeur, etat_api: State, phrase_api: str) -> tuple[State, str]:
@@ -308,7 +329,7 @@ def _neutraliser(signal: Signal) -> Signal:
 
 def _lignes_metadonnees(signaux: list[dict]) -> list[MetaRow]:
     """La couche Metadonnees s'affiche en tableau categorie / valeur / risque."""
-    lignes: list[MetaRow] = []
+    lignes: list[tuple[int, MetaRow]] = []
     for brut in signaux:
         cle = _cle(brut)
         if cle not in METADONNEES_CONSERVEES:
@@ -317,21 +338,32 @@ def _lignes_metadonnees(signaux: list[dict]) -> list[MetaRow]:
         etat = _etat(brut.get("verdict"), brut.get("skip_reason"))
         valeur = _valeur_tableau(brut)
         note = str(brut.get("description") or "")
+        etiquette = str(brut.get("label") or brut.get("name") or "—")
 
-        if cle in ("creation_software", "editing_software") and brut.get("value"):
+        if cle in METADONNEES_INFORMATIVES:
+            # Information de contexte, jamais une alerte : présente ou absente,
+            # la ligne reste au vert.
+            etiquette = METADONNEES_INFORMATIVES[cle]
+            etat, note = State.OK, ""
+            valeur = (_appareil(brut) if cle == "capture"
+                      else _date_lisible(brut.get("value")) or "non renseignée")
+        elif cle in ("creation_software", "editing_software") and brut.get("value"):
             # On affiche le nom du logiciel, pas le commentaire du moteur.
             valeur = _nom_logiciel(brut["value"])
             etat, note = _etat_logiciel(brut["value"], etat, note)
         elif "date" in cle or "date" in _sans_accent(brut.get("label")):
             valeur = _date_lisible(brut.get("value")) or valeur
 
-        lignes.append(MetaRow(
-            label=str(brut.get("label") or brut.get("name") or "—"),
+        # Le rang suit METADONNEES_CONSERVEES : l'ordre du tableau ne dépend
+        # donc pas de celui des signaux renvoyés par l'API.
+        lignes.append((METADONNEES_CONSERVEES.index(cle), MetaRow(
+            label=etiquette,
             value=valeur,
             state=etat,
             note=note if etat in (State.FRAUD, State.SUSPECT) else "",
-        ))
-    return lignes
+        )))
+
+    return [ligne for _, ligne in sorted(lignes, key=lambda paire: paire[0])]
 
 
 def _diffs(signaux: list[dict]) -> list[DiffRow]:
