@@ -409,14 +409,6 @@ def verdict_card(report: Report) -> None:
                     "aucun crédit consommé."
                 ).classes("dedup-text")
 
-        ui.element("div").classes("sep")
-
-        with ui.row().classes("w-full gap-8 flex-wrap"):
-            for label, value in report.kpis:
-                with ui.column().classes("gap-1"):
-                    ui.label(label).classes("kpi-label")
-                    ui.label(value).classes("kpi-value")
-
 
 def document_preview(url: str, kind: str, message: str) -> None:
     """Rendu visuel du document soumis. Rien n'est écrit sur le disque."""
