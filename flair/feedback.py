@@ -1,21 +1,16 @@
-"""Recueil du retour utilisateur sur le verdict, et stockage en base.
+"""Journal des analyses et retour utilisateur sur le verdict.
 
-Deux moteurs possibles, choisis automatiquement :
-  - PostgreSQL si la variable DATABASE_URL est definie (cas de Railway) ;
-  - un fichier SQLite local sinon, pour developper sans base.
-
-Le schema est cree au demarrage s'il n'existe pas.
+Une ligne est ecrite des le depot d'un document : qui, quoi, quel verdict.
+Elle est completee ensuite si la personne repond au questionnaire. Une analyse
+sans retour reste donc visible, avec `satisfait` vide.
 """
 
 from __future__ import annotations
 
-import os
-import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-DATABASE_URL = os.getenv("DATABASE_URL", "")
-SQLITE_PATH = os.getenv("FLAIR_SQLITE_PATH", "retours.db")
+from .base import MARQUEUR, colonne_si_absente, curseur, moteur, utilise_postgres
 
 
 @dataclass(frozen=True)
@@ -68,7 +63,8 @@ TOUS_LES_MOTIFS = {m.code: m.label for g in GROUPES for m in g.motifs}
 
 def type_de_document(filename: str) -> str:
     """Le type renvoye par l'API, deduit de l'extension du nom de fichier."""
-    extension = str(filename or "").rsplit(".", 1)[-1].lower() if "." in (filename or "") else ""
+    nom = str(filename or "")
+    extension = nom.rsplit(".", 1)[-1].lower() if "." in nom else ""
     if extension == "pdf":
         return "pdf"
     if extension in ("jpg", "jpeg"):
@@ -82,86 +78,93 @@ def type_de_document(filename: str) -> str:
 # Stockage
 # --------------------------------------------------------------------------
 
-_SCHEMA_SQLITE = """
-CREATE TABLE IF NOT EXISTS retours (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    cree_le      TEXT    NOT NULL,
-    nom_document TEXT    NOT NULL,
-    type_document TEXT   NOT NULL,
-    verdict      TEXT,
-    satisfait    TEXT    NOT NULL,
-    motifs       TEXT,
-    justification TEXT
-)
-"""
-
 _SCHEMA_POSTGRES = """
 CREATE TABLE IF NOT EXISTS retours (
     id            SERIAL PRIMARY KEY,
     cree_le       TIMESTAMPTZ NOT NULL,
+    email         TEXT,
     nom_document  TEXT        NOT NULL,
     type_document TEXT        NOT NULL,
     verdict       TEXT,
-    satisfait     TEXT        NOT NULL,
+    satisfait     TEXT,
+    motifs        TEXT,
+    justification TEXT
+)
+"""
+
+_SCHEMA_SQLITE = """
+CREATE TABLE IF NOT EXISTS retours (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    cree_le       TEXT NOT NULL,
+    email         TEXT,
+    nom_document  TEXT NOT NULL,
+    type_document TEXT NOT NULL,
+    verdict       TEXT,
+    satisfait     TEXT,
     motifs        TEXT,
     justification TEXT
 )
 """
 
 
-def _postgres():
-    """Connexion PostgreSQL, ou None si indisponible."""
-    if not DATABASE_URL.startswith(("postgres://", "postgresql://")):
-        return None
-    try:
-        import psycopg
-    except ImportError:
-        return None
-    return psycopg.connect(DATABASE_URL)
-
-
 def init() -> str:
-    """Cree le schema. Renvoie le moteur reellement utilise, pour les logs."""
-    connexion = _postgres()
-    if connexion is not None:
-        with connexion:
-            with connexion.cursor() as curseur:
-                curseur.execute(_SCHEMA_POSTGRES)
-        connexion.close()
-        return "postgresql"
-    with sqlite3.connect(SQLITE_PATH) as connexion:
-        connexion.execute(_SCHEMA_SQLITE)
-    return f"sqlite ({SQLITE_PATH})"
+    """Cree le schema et renvoie le moteur utilise, pour les journaux."""
+    with curseur() as c:
+        c.execute(_SCHEMA_POSTGRES if utilise_postgres() else _SCHEMA_SQLITE)
+    # Bases deja deployees : la colonne email n'existait pas, et `satisfait`
+    # etait obligatoire alors qu'une analyse sans retour doit pouvoir exister.
+    colonne_si_absente("retours", "email", "TEXT")
+    if utilise_postgres():
+        try:
+            with curseur() as c:
+                c.execute("ALTER TABLE retours ALTER COLUMN satisfait DROP NOT NULL")
+        except Exception:
+            pass
+    return moteur()
 
 
-def enregistrer(nom_document: str, verdict: str, satisfait: bool,
-                motifs: list[str], justification: str) -> None:
-    """Ajoute une ligne de retour. Ne leve jamais : un echec de base ne doit
-    pas empecher la demonstration de continuer."""
+def enregistrer_analyse(email: str, nom_document: str, verdict: str) -> int | None:
+    """Ecrit une ligne des le depot du document. Renvoie son identifiant.
+
+    Ne leve jamais : un echec de base ne doit pas empecher la demonstration.
+    """
     ligne = (
         datetime.now(timezone.utc).isoformat(),
+        str(email or ""),
         str(nom_document or ""),
         type_de_document(nom_document),
         str(verdict or ""),
-        "oui" if satisfait else "non",
-        ",".join(motifs) if motifs else "",
-        (justification or "").strip(),
+        "",
     )
     try:
-        connexion = _postgres()
-        if connexion is not None:
-            with connexion:
-                with connexion.cursor() as curseur:
-                    curseur.execute(
-                        "INSERT INTO retours (cree_le, nom_document, type_document,"
-                        " verdict, satisfait, motifs, justification)"
-                        " VALUES (%s, %s, %s, %s, %s, %s, %s)", ligne)
-            connexion.close()
-            return
-        with sqlite3.connect(SQLITE_PATH) as connexion:
-            connexion.execute(
-                "INSERT INTO retours (cree_le, nom_document, type_document,"
-                " verdict, satisfait, motifs, justification)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)", ligne)
-    except Exception as erreur:  # base injoignable, schema absent…
+        with curseur() as c:
+            colonnes = ("cree_le, email, nom_document, type_document, verdict, satisfait")
+            valeurs = ", ".join([MARQUEUR] * 6)
+            if utilise_postgres():
+                c.execute(f"INSERT INTO retours ({colonnes}) VALUES ({valeurs})"
+                          " RETURNING id", ligne)
+                resultat = c.fetchone()
+                return int(resultat[0]) if resultat else None
+            c.execute(f"INSERT INTO retours ({colonnes}) VALUES ({valeurs})", ligne)
+            return int(c.lastrowid)
+    except Exception as erreur:
+        print(f"[flair] analyse non enregistrée : {erreur}")
+        return None
+
+
+def enregistrer_retour(identifiant: int | None, satisfait: bool,
+                       motifs: list[str], justification: str) -> None:
+    """Complete la ligne de l'analyse avec l'avis de la personne."""
+    if identifiant is None:
+        return
+    try:
+        with curseur() as c:
+            c.execute(
+                f"UPDATE retours SET satisfait = {MARQUEUR}, motifs = {MARQUEUR},"
+                f" justification = {MARQUEUR} WHERE id = {MARQUEUR}",
+                ("oui" if satisfait else "non",
+                 ",".join(motifs) if motifs else "",
+                 (justification or "").strip(),
+                 identifiant))
+    except Exception as erreur:
         print(f"[flair] retour non enregistré : {erreur}")

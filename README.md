@@ -165,6 +165,29 @@ Ouvre ton navigateur et va sur :
 | `FLAIR_API_KEY` | *(vide)* | **⚠️ OBLIGATOIRE** — Ta clé d'accès à l'API |
 | `PORT` | `8080` | Port du serveur web |
 | `FLAIR_RELOAD` | `0` | Mets `1` en développement : la page se recharge toute seule à chaque modification du code |
+| `FLAIR_RETOUR_BLOQUANT` | `0` | Mets `1` pour exiger le questionnaire avant un nouveau dépôt |
+
+### Accès par e-mail, crédits et base de données
+
+| Variable | Valeur par défaut | Description |
+|---|---|---|
+| `FLAIR_BASE_URL` | `http://localhost:8080` | Adresse publique de la démo — sert à construire le lien de confirmation envoyé par courriel. **À définir en production**, sinon le lien pointe vers localhost. |
+| `FLAIR_SECRET` | *(valeur de test)* | Secret de signature des sessions. **À définir en production** : sans lui, un redémarrage déconnecte tout le monde. |
+| `RESEND_API_KEY` | *(vide)* | Clé Resend pour l'envoi du courriel de confirmation. Sans elle, aucun envoi n'a lieu : le lien s'affiche à l'écran (pratique en local, à proscrire en production). |
+| `FLAIR_MAIL_FROM` | `FLAIR <onboarding@resend.dev>` | Expéditeur du courriel. À remplacer par une adresse du domaine vérifié chez Resend. |
+| `DATABASE_URL` | *(vide)* | PostgreSQL. Renseignée automatiquement par Railway. Si absente, une base SQLite locale est utilisée. |
+| `FLAIR_SQLITE_PATH` | `retours.db` | Emplacement de la base SQLite locale, quand `DATABASE_URL` est absente. |
+
+Chaque visiteur confirme son adresse puis dispose de **10 analyses**.
+Deux adresses internes — `leo.lorenzo2001@gmail.com` et `nassim.yazi2001@gmail.com` —
+ont des analyses illimitées et voient la réponse brute de l'API. Elles passent
+elles aussi par la confirmation, sinon n'importe qui obtiendrait leurs droits
+en tapant leur adresse.
+
+Deux tables sont créées automatiquement au démarrage :
+`comptes` (adresse, jeton, confirmation, crédits consommés) et
+`retours` (une ligne par document analysé : date, adresse, nom du document,
+type, verdict, puis l'avis de la personne si elle répond au questionnaire).
 
 ---
 

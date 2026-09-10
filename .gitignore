@@ -28,3 +28,6 @@ desktop.ini
 *.db
 *.sqlite
 *.sqlite3
+
+# Sessions NiceGUI (app.storage.user) — donnees locales, jamais versionnees
+.nicegui/

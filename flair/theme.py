@@ -303,3 +303,29 @@ document.addEventListener('click', (e) => {
 });
 </script>
 """
+
+# Ajouts : portail d'accès par e-mail et rappel des crédits.
+HEAD = HEAD.replace("</style>", """
+/* ---------- portail d'accès ---------- */
+.portail { border-left:5px solid var(--accent); max-width:46rem; }
+.portail-titre { font-family:'IBM Plex Serif',serif; font-weight:600;
+  font-size:1.5rem; }
+.portail-ligne { max-width:34rem; }
+.portail-champ { flex:1; min-width:0; }
+.portail-champ .q-field__control { background:var(--card); font-size:.9rem; }
+.portail-message { font-size:.85rem; line-height:1.55; }
+.portail-succes { color:var(--ok); }
+.portail-erreur { color:var(--fraud); }
+.portail-lien { display:inline-flex; align-items:center; text-decoration:none;
+  width:fit-content; padding:10px 20px; border-radius:6px;
+  background:var(--accent); color:#fff; font-size:.85rem; }
+.portail-lien:hover { filter:brightness(1.08); }
+
+/* ---------- rappel des crédits ---------- */
+.credits { border:1px solid var(--line); border-radius:99px;
+  background:var(--card); padding:7px 16px; }
+.credits-email { font-size:.74rem; color:var(--ink-2); }
+.credits-solde { font-family:'IBM Plex Mono',monospace; font-size:.66rem;
+  letter-spacing:.12em; text-transform:uppercase; color:var(--accent); }
+.credits-vide { color:var(--fraud); }
+</style>""")
