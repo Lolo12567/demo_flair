@@ -1,14 +1,14 @@
 """FLAIR — interface de démonstration.
 
 Ce fichier ne fait que quatre choses :
-  1. contrôler l'accès (adresse e-mail confirmée, crédits d'analyse),
+  1. contrôler l'accès (session Clerk, crédits d'analyse),
   2. appeler l'API,
   3. dessiner la page,
   4. orchestrer l'attente et l'affichage du résultat.
 
 Toute la logique de lecture de l'API vit dans flair/adapter.py.
 Tout le style vit dans flair/theme.py.
-Les comptes et les crédits vivent dans flair/comptes.py.
+La connexion vit dans flair/identite.py, les crédits dans flair/comptes.py.
 """
 
 import asyncio
@@ -18,7 +18,8 @@ import json
 import os
 
 import httpx
-from nicegui import app, events, ui
+from fastapi import Request
+from nicegui import events, ui
 
 # Fait utiliser à Python le magasin de certificats du système d'exploitation.
 # Indispensable derrière un antivirus qui inspecte le HTTPS (Avast, Kaspersky…)
@@ -32,18 +33,12 @@ except ImportError:
     pass
 
 from flair import components as fc
-from flair import comptes, feedback, mail, preview, theme
+from flair import comptes, feedback, identite, preview, theme
 from flair.adapter import build_report
 
 print(f"[flair] base de retours : {feedback.init()}")
 comptes.init()
-
-# Adresse publique de la démo, utilisée dans le lien de confirmation.
-BASE_URL = os.getenv("FLAIR_BASE_URL", "http://localhost:8080").rstrip("/")
-
-# Secret de signature des sessions. À définir en production : sans lui, une
-# reconnexion du service déconnecterait tout le monde.
-SECRET_SESSION = os.getenv("FLAIR_SECRET", "flair-demo-secret-local")
+print(f"[flair] connexion Clerk : {identite.resume()}")
 
 API_URL = os.getenv("FLAIR_API_URL", "https://api.myflair.app/v1/analyze")
 API_KEY = os.getenv("FLAIR_API_KEY", "")
@@ -89,34 +84,6 @@ async def call_flair_api(filename: str, content: bytes) -> dict:
         return response.json()
 
 
-# --------------------------------------------------------------------------
-# Accès
-# --------------------------------------------------------------------------
-
-def demander_acces(saisie: str) -> tuple[bool, str]:
-    """Traite la demande d'accès. Renvoie (succès, message affiché à l'écran)."""
-    adresse = comptes.normaliser(saisie)
-    if not comptes.est_valide(adresse):
-        return False, "Cette adresse ne semble pas valide. Vérifiez la saisie."
-
-    jeton = comptes.demander_acces(adresse)
-    lien = f"{BASE_URL}/confirm?jeton={jeton}"
-
-    if mail.envoyer_confirmation(adresse, lien):
-        return True, (
-            f"Un lien de confirmation vient d'être envoyé à {adresse}. "
-            "Ouvrez-le pour activer vos dix analyses."
-        )
-    if not mail.CLE_API:
-        # Développement local : aucun prestataire d'envoi n'est configuré,
-        # on affiche le lien pour que le parcours reste testable.
-        return True, f"Envoi non configuré. Lien de confirmation : {lien}"
-    return False, (
-        "L'envoi du courriel a échoué. Réessayez dans un instant ou "
-        "écrivez-nous."
-    )
-
-
 def barre_haute() -> None:
     with ui.element("div").classes("topbar"):
         with ui.row().classes("topbar-inner w-full items-center justify-between no-wrap"):
@@ -144,48 +111,19 @@ def pied_de_page() -> None:
         ui.html(theme.LOGO.replace('class="logo"', 'class="logo-footer"'))
 
 
-@ui.page("/confirm")
-def page_confirmation(jeton: str = ""):
-    """Cible du lien envoyé par courriel : valide le jeton et ouvre la session."""
-    ui.add_head_html(theme.HEAD)
-    barre_haute()
-
-    adresse = comptes.confirmer(jeton)
-
-    with ui.column().classes("w-full max-w-4xl mx-auto px-6 pt-14 pb-6 gap-10"):
-        with ui.column().classes("panel portail w-full p-8 gap-5 fade-in"):
-            if adresse:
-                app.storage.user["email"] = adresse
-                ui.label("Adresse confirmée").classes("portail-titre")
-                ui.label(
-                    f"{adresse} — votre accès est ouvert. "
-                    "Vous disposez de dix analyses de documents."
-                    if not comptes.est_admin(adresse)
-                    else f"{adresse} — accès interne, analyses illimitées."
-                ).classes("hero-sub").style("max-width:34rem")
-                with ui.link(target="/").classes("fb-submit portail-lien"):
-                    ui.label("Accéder à la démonstration")
-            else:
-                ui.label("Lien non valable").classes("portail-titre")
-                ui.label(
-                    "Ce lien a expiré ou a été remplacé par une demande plus "
-                    "récente. Redemandez un accès depuis la page d'accueil."
-                ).classes("hero-sub").style("max-width:34rem")
-                with ui.link(target="/").classes("fb-submit portail-lien"):
-                    ui.label("Revenir à l'accueil")
-        pied_de_page()
-
-
 @ui.page("/")
-def main_page():
+def main_page(request: Request):
     ui.add_head_html(theme.HEAD)
     ui.add_body_html(theme.CLICK_RELAY)
 
     barre_haute()
 
-    email = comptes.normaliser(app.storage.user.get("email", ""))
-    situation = comptes.etat(email) if email else {"confirme": False}
-    admin = bool(email) and comptes.est_admin(email)
+    # Clerk dépose un jeton de session dans le cookie `__session` : le serveur
+    # le vérifie ici, au chargement de la page.
+    visiteur = identite.visiteur(request)
+    if identite.est_configure():
+        ui.add_head_html(identite.balises_script())
+        ui.add_body_html(identite.script_page(connecte=visiteur is not None))
 
     with ui.column().classes("w-full max-w-4xl mx-auto px-6 pt-14 pb-6 gap-10"):
 
@@ -201,19 +139,35 @@ def main_page():
                 "de fraude n'a été identifiée."
             ).classes("hero-sub")
 
-        # Tant que l'adresse n'est pas confirmée, la démonstration reste fermée.
-        if not situation.get("confirme"):
-            fc.portail_email(demander_acces)
+        if not identite.est_configure():
+            fc.portail_indisponible()
             pied_de_page()
             return
 
+        # Tant que Clerk ne reconnaît aucune session, la démonstration reste fermée.
+        if visiteur is None:
+            fc.portail_connexion()
+            pied_de_page()
+            return
+
+        # Les crédits sont rattachés à l'identifiant Clerk ; l'adresse ne sert
+        # qu'à l'affichage, au journal et à reconnaître les deux accès internes.
+        identifiant = visiteur.identifiant
+        email = visiteur.email
+        comptes.enregistrer(identifiant, email)
+        admin = comptes.est_admin(email)
+
         credits_slot = ui.column().classes("w-full")
 
+        def deconnecter() -> None:
+            ui.run_javascript("window.flairDeconnexion && window.flairDeconnexion()")
+
         def rafraichir_credits() -> None:
-            etat = comptes.etat(email)
+            etat = comptes.etat(identifiant)
             credits_slot.clear()
             with credits_slot:
-                fc.bandeau_credits(email, etat["restants"], etat["illimite"])
+                fc.bandeau_credits(email, etat["restants"], etat["illimite"],
+                                   sur_deconnexion=deconnecter)
 
         rafraichir_credits()
 
@@ -287,7 +241,7 @@ def main_page():
                     json.dumps(raw, indent=2, ensure_ascii=False), language="json"
                 ).classes("w-full")
 
-        if not comptes.peut_analyser(email):
+        if not comptes.peut_analyser(identifiant):
             epuiser()
 
         async def analyze(e: events.UploadEventArguments):
@@ -301,7 +255,7 @@ def main_page():
 
             # Le contrôle des crédits se refait ici : la page a pu rester
             # ouverte pendant que le compte s'épuisait dans un autre onglet.
-            if not comptes.peut_analyser(email):
+            if not comptes.peut_analyser(identifiant):
                 epuiser()
                 show_error(
                     "Vos dix analyses ont été utilisées. Écrivez-nous pour "
@@ -356,11 +310,12 @@ def main_page():
 
             # L'analyse a abouti : elle est journalisée et décomptée.
             analyse_id = feedback.enregistrer_analyse(
+                identifiant=identifiant,
                 email=email,
                 nom_document=filename,
                 verdict=report.verdict_label,
             )
-            comptes.consommer(email)
+            comptes.consommer(identifiant)
             rafraichir_credits()
 
             # Couche 0 — verdict global
@@ -374,7 +329,7 @@ def main_page():
                 with layers_slot:
                     fc.layer_block(layer, open_=layer.alert_count > 0)
 
-            reste = comptes.peut_analyser(email)
+            reste = comptes.peut_analyser(identifiant)
             verrouiller(
                 RETOUR_BLOQUANT,
                 "Donnez votre avis sur le verdict ci-dessous pour analyser "
@@ -386,7 +341,7 @@ def main_page():
             with feedback_slot:
                 fc.feedback_form(
                     analyse_id=analyse_id,
-                    on_submit=lambda: (epuiser() if not comptes.peut_analyser(email)
+                    on_submit=lambda: (epuiser() if not comptes.peut_analyser(identifiant)
                                        else verrouiller(False)),
                 )
 
@@ -402,6 +357,5 @@ if __name__ in {"__main__", "__mp_main__"}:
         favicon="🛡️",
         # FLAIR_RELOAD=1 => la page se rafraîchit toute seule quand tu modifies le code.
         reload=os.getenv("FLAIR_RELOAD", "0") == "1",
-        storage_secret=SECRET_SESSION,
         show=False,
     )

@@ -443,58 +443,54 @@ def pending_layer(number: int, name: str, subtitle: str) -> None:
             ui.label("Analyse…").classes("sev sev-pending")
 
 
-def portail_email(sur_demande) -> None:
-    """Ecran d'entree : saisie de l'adresse, avant tout acces a la demonstration.
+def portail_connexion() -> None:
+    """Ecran d'entree : cadre dans lequel Clerk dessine sa connexion.
 
-    `sur_demande(email)` renvoie (succes, message). Le message est affiche tel
-    quel : confirmation envoyee, adresse invalide, ou lien de secours quand
-    aucun prestataire d'envoi n'est configure.
+    Le formulaire (saisie de l'adresse, envoi du lien magique) est monte par le
+    script Clerk dans `.clerk-connexion` — voir flair/identite.py. Cote Python,
+    on ne pose que le cadre et le texte.
     """
     with ui.column().classes("panel portail w-full p-8 gap-5 fade-in"):
         ui.label("Accès à la démonstration").classes("portail-titre")
         ui.label(
-            "Indiquez votre adresse professionnelle. Vous recevrez un lien de "
-            "confirmation, puis vous disposerez de dix analyses de documents."
+            "Connectez-vous avec votre adresse professionnelle. Vous recevrez un "
+            "lien de connexion, puis vous disposerez de dix analyses de documents."
         ).classes("hero-sub").style("max-width:34rem")
 
-        message = ui.label("").classes("portail-message")
-        message.set_visibility(False)
-
-        with ui.row().classes("w-full items-center gap-3 no-wrap portail-ligne"):
-            champ = ui.input(placeholder="prenom.nom@entreprise.fr").props(
-                "outlined dense type=email").classes("portail-champ")
-            bouton = ui.button("Recevoir le lien").props(
-                "unelevated no-caps").classes("fb-submit")
-
-        def demander() -> None:
-            succes, texte = sur_demande(champ.value or "")
-            message.text = texte
-            message.classes(remove="portail-erreur portail-succes")
-            message.classes(add="portail-succes" if succes else "portail-erreur")
-            message.set_visibility(True)
-            if succes:
-                champ.set_visibility(False)
-                bouton.set_visibility(False)
-
-        bouton.on("click", demander)
-        champ.on("keydown.enter", demander)
+        ui.label("Chargement de la connexion…").classes("clerk-etat")
+        ui.element("div").classes("clerk-connexion")
 
         ui.label(
+            "Ouvrez le lien reçu sur ce même appareil et dans ce même navigateur. "
             "Votre adresse ne sert qu'à ouvrir cet accès et à rattacher vos "
             "analyses. Aucun démarchage."
         ).classes("smallprint").style("max-width:34rem")
 
 
-def bandeau_credits(email: str, restants: int, illimite: bool) -> None:
-    """Rappel discret du compte utilise et des analyses restantes."""
+def portail_indisponible() -> None:
+    """A la place du portail, quand les cles Clerk ne sont pas definies."""
+    with ui.column().classes("panel portail w-full p-8 gap-3 fade-in"):
+        ui.label("Connexion non configurée").classes("portail-titre")
+        ui.label(
+            "Les clés Clerk sont absentes : définissez CLERK_PUBLISHABLE_KEY et "
+            "CLERK_SECRET_KEY, puis relancez le serveur."
+        ).classes("portail-erreur")
+
+
+def bandeau_credits(email: str, restants: int, illimite: bool,
+                    sur_deconnexion) -> None:
+    """Rappel discret du compte utilise, des analyses restantes, et sortie."""
     with ui.row().classes("credits w-full items-center justify-between no-wrap gap-4"):
         ui.label(email).classes("mono credits-email")
-        if illimite:
-            ui.label("accès interne · analyses illimitées").classes("credits-solde")
-        elif restants > 0:
-            ui.label(
-                f"{restants} analyse{'s' if restants > 1 else ''} restante"
-                f"{'s' if restants > 1 else ''}"
-            ).classes("credits-solde")
-        else:
-            ui.label("crédits épuisés").classes("credits-solde credits-vide")
+        with ui.row().classes("items-center no-wrap gap-4"):
+            if illimite:
+                ui.label("accès interne · analyses illimitées").classes("credits-solde")
+            elif restants > 0:
+                ui.label(
+                    f"{restants} analyse{'s' if restants > 1 else ''} restante"
+                    f"{'s' if restants > 1 else ''}"
+                ).classes("credits-solde")
+            else:
+                ui.label("crédits épuisés").classes("credits-solde credits-vide")
+            ui.button("Se déconnecter", on_click=sur_deconnexion).props(
+                "flat dense no-caps").classes("credits-sortie")

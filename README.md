@@ -167,27 +167,34 @@ Ouvre ton navigateur et va sur :
 | `FLAIR_RELOAD` | `0` | Mets `1` en développement : la page se recharge toute seule à chaque modification du code |
 | `FLAIR_RETOUR_BLOQUANT` | `0` | Mets `1` pour exiger le questionnaire avant un nouveau dépôt |
 
-### Accès par e-mail, crédits et base de données
+### Connexion (Clerk), crédits et base de données
 
 | Variable | Valeur par défaut | Description |
 |---|---|---|
-| `FLAIR_BASE_URL` | `http://localhost:8080` | Adresse publique de la démo — sert à construire le lien de confirmation envoyé par courriel. **À définir en production**, sinon le lien pointe vers localhost. |
-| `FLAIR_SECRET` | *(valeur de test)* | Secret de signature des sessions. **À définir en production** : sans lui, un redémarrage déconnecte tout le monde. |
-| `RESEND_API_KEY` | *(vide)* | Clé Resend pour l'envoi du courriel de confirmation. Sans elle, aucun envoi n'a lieu : le lien s'affiche à l'écran (pratique en local, à proscrire en production). |
-| `FLAIR_MAIL_FROM` | `FLAIR <onboarding@resend.dev>` | Expéditeur du courriel. À remplacer par une adresse du domaine vérifié chez Resend. |
+| `CLERK_PUBLISHABLE_KEY` | *(vide)* | Clé publique Clerk (`pk_test_…` en local, `pk_live_…` en production). `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` est acceptée aussi. **Obligatoire.** |
+| `CLERK_SECRET_KEY` | *(vide)* | Clé secrète Clerk (`sk_…`). Sert à vérifier les sessions et à lire l'adresse du visiteur. **Obligatoire** — ne jamais la publier. |
+| `FLAIR_BASE_URL` | `http://localhost:8080` | Adresse publique de la démo, **sans barre finale**. Clerk y renvoie après connexion, et le serveur n'accepte que les sessions émises pour cette origine. **À définir en production** (`https://demo.myflair.app`). |
 | `DATABASE_URL` | *(vide)* | PostgreSQL. Renseignée automatiquement par Railway. Si absente, une base SQLite locale est utilisée. |
 | `FLAIR_SQLITE_PATH` | `retours.db` | Emplacement de la base SQLite locale, quand `DATABASE_URL` est absente. |
 
-Chaque visiteur confirme son adresse puis dispose de **10 analyses**.
-Deux adresses internes — `leo.lorenzo2001@gmail.com` et `nassim.yazi2001@gmail.com` —
-ont des analyses illimitées et voient la réponse brute de l'API. Elles passent
-elles aussi par la confirmation, sinon n'importe qui obtiendrait leurs droits
-en tapant leur adresse.
+La connexion se fait par **lien magique**, envoyé par Clerk. Dans le tableau de
+bord Clerk → *User & authentication* : activer **Email → Email verification
+link**, désactiver le mot de passe. Le lien doit être ouvert sur le même
+appareil et dans le même navigateur, et il expire au bout de 10 minutes.
+
+Chaque visiteur connecté dispose de **10 analyses**, rattachées à son
+identifiant Clerk. Deux adresses internes — `leo.lorenzo2001@gmail.com` et
+`nassim.yazi2001@gmail.com` — ont des analyses illimitées et voient la réponse
+brute de l'API. L'adresse prise en compte est celle vérifiée par Clerk :
+personne n'obtient leurs droits en tapant simplement leur adresse.
 
 Deux tables sont créées automatiquement au démarrage :
-`comptes` (adresse, jeton, confirmation, crédits consommés) et
-`retours` (une ligne par document analysé : date, adresse, nom du document,
-type, verdict, puis l'avis de la personne si elle répond au questionnaire).
+`utilisateurs` (identifiant Clerk, adresse, crédits consommés) et
+`retours` (une ligne par document analysé : date, identifiant Clerk, adresse,
+nom du document, type, verdict, puis l'avis de la personne si elle répond au
+questionnaire). L'ancienne table `comptes` n'est plus alimentée : elle n'est
+lue qu'une fois, pour reprendre le compteur d'un visiteur qui se reconnecte
+avec la même adresse.
 
 ---
 
