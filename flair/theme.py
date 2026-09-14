@@ -323,4 +323,9 @@ HEAD = HEAD.replace("</style>", """
 .credits-solde { font-family:'IBM Plex Mono',monospace; font-size:.66rem;
   letter-spacing:.12em; text-transform:uppercase; color:var(--accent); }
 .credits-vide { color:var(--fraud); }
+
+/* ---------- contact en pied de page ---------- */
+.contact-lien { color:var(--accent); text-decoration:none;
+  border-bottom:1px solid transparent; }
+.contact-lien:hover { border-bottom-color:var(--accent); }
 </style>""")

@@ -43,6 +43,14 @@ print(f"[flair] connexion Clerk : {identite.resume()}")
 API_URL = os.getenv("FLAIR_API_URL", "https://api.myflair.app/v1/analyze")
 API_KEY = os.getenv("FLAIR_API_KEY", "")
 
+# Adresse de contact, affichée en pied de page et quand les crédits sont épuisés.
+CONTACT = "contact@myflair.app"
+
+MESSAGE_EPUISE = (
+    "Vos dix analyses ont été utilisées. Pour poursuivre la démonstration, "
+    "écrivez-nous :"
+)
+
 # Le formulaire de retour s'affiche et s'enregistre toujours. Ce réglage décide
 # seulement s'il *bloque* le dépôt d'un nouveau document tant qu'on n'a pas
 # répondu. Désactivé pour les tests internes, à passer à 1 pour de vrais
@@ -84,6 +92,11 @@ async def call_flair_api(filename: str, content: bytes) -> dict:
         return response.json()
 
 
+def lien_contact() -> ui.link:
+    """Adresse de contact cliquable : ouvre la messagerie du visiteur."""
+    return ui.link(CONTACT, f"mailto:{CONTACT}").classes("contact-lien")
+
+
 def barre_haute() -> None:
     with ui.element("div").classes("topbar"):
         with ui.row().classes("topbar-inner w-full items-center justify-between no-wrap"):
@@ -108,6 +121,9 @@ def pied_de_page() -> None:
             "en mémoire vive le temps de l'aperçu, puis sont libérés. Seuls "
             "l'empreinte SHA-256 et les résultats d'analyse sont conservés."
         ).classes("smallprint text-center").style("max-width:34rem")
+        with ui.row().classes("items-center gap-1 no-wrap smallprint"):
+            ui.label("Une question ?")
+            lien_contact()
         ui.html(theme.LOGO.replace('class="logo"', 'class="logo-footer"'))
 
 
@@ -185,9 +201,16 @@ def main_page(request: Request):
                     on_upload=lambda e: analyze(e),
                 ).props('accept=".pdf,image/*" flat')
 
-        notice = ui.label(
-            "Donnez votre avis sur le verdict ci-dessous pour analyser un autre document."
-        ).classes("dropzone-notice w-full")
+        # Message sous la zone de dépôt quand elle est bloquée. Le lien de
+        # contact n'apparaît que lorsque les crédits sont épuisés.
+        with ui.row().classes(
+            "dropzone-notice w-full justify-center items-center gap-1"
+        ) as notice:
+            notice_texte = ui.label(
+                "Donnez votre avis sur le verdict ci-dessous pour analyser un autre document."
+            )
+            notice_contact = lien_contact()
+        notice_contact.set_visibility(False)
         notice.set_visibility(False)
 
         doc_slot = ui.column().classes("w-full")
@@ -202,11 +225,13 @@ def main_page(request: Request):
         # Orchestration
         # ------------------------------------------------------------------
 
-        def verrouiller(actif: bool, message: str | None = None) -> None:
+        def verrouiller(actif: bool, message: str | None = None,
+                        contact: bool = False) -> None:
             """Bloque la zone de dépôt (retour attendu, ou crédits épuisés)."""
             upload.set_enabled(not actif)
             if message:
-                notice.text = message
+                notice_texte.text = message
+            notice_contact.set_visibility(contact)
             notice.set_visibility(actif)
             if actif:
                 zone.classes(add="dropzone-locked")
@@ -214,13 +239,9 @@ def main_page(request: Request):
                 zone.classes(remove="dropzone-locked")
 
         def epuiser() -> None:
-            verrouiller(
-                True,
-                "Vos dix analyses ont été utilisées. Écrivez-nous pour "
-                "poursuivre la démonstration.",
-            )
+            verrouiller(True, MESSAGE_EPUISE, contact=True)
 
-        def show_error(message: str) -> None:
+        def show_error(message: str, contact: bool = False) -> None:
             layers_slot.clear()
             verdict_slot.clear()
             with verdict_slot:
@@ -229,6 +250,8 @@ def main_page(request: Request):
                         "color:var(--fraud)"
                     )
                     ui.label(message).classes("signal-verdict")
+                    if contact:
+                        lien_contact()
 
         def bloc_json(raw: dict) -> None:
             """Réponse brute de l'API — réservée aux accès internes."""
@@ -257,10 +280,7 @@ def main_page(request: Request):
             # ouverte pendant que le compte s'épuisait dans un autre onglet.
             if not comptes.peut_analyser(identifiant):
                 epuiser()
-                show_error(
-                    "Vos dix analyses ont été utilisées. Écrivez-nous pour "
-                    "poursuivre la démonstration."
-                )
+                show_error(MESSAGE_EPUISE, contact=True)
                 return
 
             # Aperçu : les octets restent en mémoire vive, jamais sur le disque.

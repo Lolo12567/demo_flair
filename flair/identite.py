@@ -1,6 +1,6 @@
 """Identification des visiteurs par Clerk.
 
-Clerk affiche l'ecran de connexion (lien magique par e-mail), envoie le
+Clerk affiche l'ecran de connexion (adresse et mot de passe), envoie le
 courriel et tient la session. Ce module fait le lien cote serveur :
   1. il verifie le jeton de session que Clerk depose dans le cookie `__session`,
   2. il retrouve l'adresse verifiee rattachee a l'identifiant Clerk,
@@ -155,7 +155,36 @@ _SCRIPT = """
     window.location.replace(RETOUR);
   };
 
+  // Attend une variable globale posee par un script Clerk. Les balises sont en
+  // `defer`, mais un reseau lent, ou une page chargee pendant un redemarrage,
+  // peut les retarder ou les faire echouer : on ne suppose rien.
+  function attendreGlobale(nom, delaiMs) {
+    return new Promise(function (resoudre, rejeter) {
+      const limite = Date.now() + delaiMs;
+      (function guetter() {
+        if (window[nom]) resoudre(window[nom]);
+        else if (Date.now() > limite) rejeter(new Error(nom + " absent"));
+        else setTimeout(guetter, 100);
+      })();
+    });
+  }
+
   window.addEventListener("load", async function () {
+    let ClerkUI;
+    try {
+      [, ClerkUI] = await Promise.all([
+        attendreGlobale("Clerk", 20000),
+        attendreGlobale("__internal_ClerkUICtor", 20000),
+      ]);
+    } catch (e) {
+      console.error("[flair] scripts Clerk non chargés", e);
+      if (!CONNECTE) {
+        (await attendre(".clerk-etat")).textContent =
+          "La connexion n'a pas pu se charger. Vérifiez votre réseau, puis rechargez la page.";
+      }
+      return;
+    }
+
     let traduction;
     try {
       traduction = (await import(__TRADUCTION__)).frFR;
@@ -163,7 +192,7 @@ _SCRIPT = """
       console.warn("[flair] traduction Clerk indisponible, composant en anglais", e);
     }
     await window.Clerk.load({
-      ui: { ClerkUI: window.__internal_ClerkUICtor },
+      ui: { ClerkUI: ClerkUI },
       localization: traduction,
     });
     if (CONNECTE) return;

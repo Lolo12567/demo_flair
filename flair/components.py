@@ -311,7 +311,15 @@ def check_list(checks: list[CheckRow]) -> None:
 
 def layer_block(layer: Layer, *, open_: bool = False) -> None:
     """Une couche : en-tête cliquable + cartes de signaux."""
-    tone = layer.state.value
+    # Pastille de couche : vert, orange ou rouge. Sans rien à signaler (non
+    # applicable, pas encore exposé par l'API), elle est verte. Seul un contrôle
+    # en échec technique garde sa couleur propre, pour ne pas passer pour un
+    # risque faible.
+    pastille = {
+        State.SUSPECT: "suspect",
+        State.FRAUD: "fraud",
+        State.ERROR: "error",
+    }.get(layer.state, "ok")
     with ui.column().classes("panel layer w-full gap-0 fade-in"):
         entete = "layer-head" if layer.depliable else "layer-head layer-head-fixe"
         header = ui.row().classes(
@@ -320,7 +328,7 @@ def layer_block(layer: Layer, *, open_: bool = False) -> None:
         with header:
             with ui.row().classes("items-center gap-4 no-wrap"):
                 ui.label(f"{layer.number:02d}").classes("layer-num")
-                ui.element("div").classes(f"dot dot-{tone}")
+                ui.element("div").classes(f"dot dot-{pastille}")
                 with ui.column().classes("gap-1"):
                     ui.label(layer.name).classes("layer-name")
                     ui.label(layer.headline).classes("layer-headline")
@@ -446,22 +454,24 @@ def pending_layer(number: int, name: str, subtitle: str) -> None:
 def portail_connexion() -> None:
     """Ecran d'entree : cadre dans lequel Clerk dessine sa connexion.
 
-    Le formulaire (saisie de l'adresse, envoi du lien magique) est monte par le
+    Le formulaire (adresse, mot de passe, code de verification) est monte par le
     script Clerk dans `.clerk-connexion` — voir flair/identite.py. Cote Python,
     on ne pose que le cadre et le texte.
     """
     with ui.column().classes("panel portail w-full p-8 gap-5 fade-in"):
         ui.label("Accès à la démonstration").classes("portail-titre")
         ui.label(
-            "Connectez-vous avec votre adresse professionnelle. Vous recevrez un "
-            "lien de connexion, puis vous disposerez de dix analyses de documents."
+            "Créez votre accès avec votre adresse professionnelle et un mot de "
+            "passe. Vous recevrez un code par e-mail pour confirmer votre adresse, "
+            "puis vous disposerez de dix analyses de documents. Pour revenir, il "
+            "suffira de vous reconnecter avec la même adresse et le même mot de "
+            "passe : vos crédits restants vous attendront."
         ).classes("hero-sub").style("max-width:34rem")
 
         ui.label("Chargement de la connexion…").classes("clerk-etat")
         ui.element("div").classes("clerk-connexion")
 
         ui.label(
-            "Ouvrez le lien reçu sur ce même appareil et dans ce même navigateur. "
             "Votre adresse ne sert qu'à ouvrir cet accès et à rattacher vos "
             "analyses. Aucun démarchage."
         ).classes("smallprint").style("max-width:34rem")

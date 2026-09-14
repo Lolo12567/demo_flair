@@ -177,10 +177,12 @@ Ouvre ton navigateur et va sur :
 | `DATABASE_URL` | *(vide)* | PostgreSQL. Renseignée automatiquement par Railway. Si absente, une base SQLite locale est utilisée. |
 | `FLAIR_SQLITE_PATH` | `retours.db` | Emplacement de la base SQLite locale, quand `DATABASE_URL` est absente. |
 
-La connexion se fait par **lien magique**, envoyé par Clerk. Dans le tableau de
-bord Clerk → *User & authentication* : activer **Email → Email verification
-link**, désactiver le mot de passe. Le lien doit être ouvert sur le même
-appareil et dans le même navigateur, et il expire au bout de 10 minutes.
+La connexion se fait par **adresse e-mail et mot de passe**, gérés par Clerk.
+À l'inscription, Clerk envoie un code par e-mail pour vérifier l'adresse ; le
+visiteur revient ensuite avec la même adresse et le même mot de passe, et
+retrouve ses crédits. Dans le tableau de bord Clerk → *User & authentication* :
+garder le **mot de passe** activé, activer la vérification de l'adresse par
+**code**, et retirer Google dans *SSO connections*.
 
 Chaque visiteur connecté dispose de **10 analyses**, rattachées à son
 identifiant Clerk. Deux adresses internes — `leo.lorenzo2001@gmail.com` et

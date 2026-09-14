@@ -1,6 +1,6 @@
 """Credits d'analyse, rattaches a l'identifiant utilisateur fourni par Clerk.
 
-La connexion (lien magique par e-mail) est entierement geree par Clerk : ce
+La connexion (adresse, mot de passe, code par e-mail) est geree par Clerk : ce
 module ne s'occupe que du decompte. Chaque visiteur connecte dispose de
 CREDITS_OFFERTS analyses. Deux adresses internes ont des credits illimites et
 voient la reponse brute de l'API.
