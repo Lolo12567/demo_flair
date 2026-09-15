@@ -2,15 +2,17 @@
 
 La connexion (adresse, mot de passe, code par e-mail) est geree par Clerk : ce
 module ne s'occupe que du decompte. Chaque visiteur connecte dispose de
-CREDITS_OFFERTS analyses. Deux adresses internes ont des credits illimites et
-voient la reponse brute de l'API.
+CREDITS_OFFERTS analyses, sauf allocation particuliere fixee pour son adresse
+dans FLAIR_CREDITS_SPECIAUX. Deux adresses internes ont des credits illimites
+et voient la reponse brute de l'API.
 
-L'adresse comparee a ces deux-la est celle que Clerk a verifiee : personne ne
-peut obtenir leurs privileges en tapant simplement leur adresse.
+L'adresse comparee a ces listes est celle que Clerk a verifiee : personne ne
+peut obtenir ces droits en tapant simplement une adresse.
 """
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 
 from .base import MARQUEUR, curseur, utilise_postgres
@@ -49,6 +51,27 @@ def normaliser(email: str) -> str:
 
 def est_admin(email: str) -> bool:
     return normaliser(email) in ADMINS
+
+
+def allocations_particulieres() -> dict[str, int]:
+    """Credits accordes a certaines adresses, lus dans FLAIR_CREDITS_SPECIAUX.
+
+    Format : "adresse:credits,adresse:credits". La liste vit dans une variable
+    d'environnement plutot que dans le code : ce sont des adresses de personnes
+    exterieures, elles n'ont rien a faire dans le depot.
+    """
+    allocations: dict[str, int] = {}
+    for morceau in os.getenv("FLAIR_CREDITS_SPECIAUX", "").split(","):
+        adresse, _, nombre = morceau.rpartition(":")
+        adresse, nombre = normaliser(adresse), nombre.strip()
+        if adresse and nombre.isdigit():
+            allocations[adresse] = int(nombre)
+    return allocations
+
+
+def credits_alloues(email: str) -> int:
+    """Nombre total d'analyses auxquelles une adresse a droit."""
+    return allocations_particulieres().get(normaliser(email), CREDITS_OFFERTS)
 
 
 def _maintenant() -> str:
@@ -110,7 +133,7 @@ def etat(identifiant: str) -> dict:
         "existe": True,
         "utilises": utilises,
         "illimite": illimite,
-        "restants": -1 if illimite else max(0, CREDITS_OFFERTS - utilises),
+        "restants": -1 if illimite else max(0, credits_alloues(ligne[0]) - utilises),
     }
 
 

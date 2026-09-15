@@ -176,6 +176,7 @@ Ouvre ton navigateur et va sur :
 | `FLAIR_BASE_URL` | `http://localhost:8080` | Adresse publique de la démo, **sans barre finale**. Clerk y renvoie après connexion, et le serveur n'accepte que les sessions émises pour cette origine. **À définir en production** (`https://demo.myflair.app`). |
 | `DATABASE_URL` | *(vide)* | PostgreSQL. Renseignée automatiquement par Railway. Si absente, une base SQLite locale est utilisée. |
 | `FLAIR_SQLITE_PATH` | `retours.db` | Emplacement de la base SQLite locale, quand `DATABASE_URL` est absente. |
+| `FLAIR_CREDITS_SPECIAUX` | *(vide)* | Nombre total d'analyses accordé à certaines adresses, au lieu de 10. Format `adresse:credits,adresse:credits`. Tenu hors du code, car ce sont des adresses de personnes extérieures. |
 
 La connexion se fait par **adresse e-mail et mot de passe**, gérés par Clerk.
 À l'inscription, Clerk envoie un code par e-mail pour vérifier l'adresse ; le
@@ -184,8 +185,8 @@ retrouve ses crédits. Dans le tableau de bord Clerk → *User & authentication*
 garder le **mot de passe** activé, activer la vérification de l'adresse par
 **code**, et retirer Google dans *SSO connections*.
 
-Chaque visiteur connecté dispose de **10 analyses**, rattachées à son
-identifiant Clerk. Deux adresses internes — `leo.lorenzo2001@gmail.com` et
+Chaque visiteur connecté dispose de **10 analyses** — ou du nombre fixé pour
+son adresse dans `FLAIR_CREDITS_SPECIAUX` —, rattachées à son identifiant Clerk. Deux adresses internes — `leo.lorenzo2001@gmail.com` et
 `nassim.yazi2001@gmail.com` — ont des analyses illimitées et voient la réponse
 brute de l'API. L'adresse prise en compte est celle vérifiée par Clerk :
 personne n'obtient leurs droits en tapant simplement leur adresse.

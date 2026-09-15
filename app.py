@@ -39,6 +39,8 @@ from flair.adapter import build_report
 print(f"[flair] base de retours : {feedback.init()}")
 comptes.init()
 print(f"[flair] connexion Clerk : {identite.resume()}")
+print(f"[flair] crédits particuliers : "
+      f"{len(comptes.allocations_particulieres())} adresse(s)")
 
 API_URL = os.getenv("FLAIR_API_URL", "https://api.myflair.app/v1/analyze")
 API_KEY = os.getenv("FLAIR_API_KEY", "")
@@ -46,8 +48,9 @@ API_KEY = os.getenv("FLAIR_API_KEY", "")
 # Adresse de contact, affichée en pied de page et quand les crédits sont épuisés.
 CONTACT = "contact@myflair.app"
 
+# Neutre sur le nombre : certaines adresses ont plus de dix analyses.
 MESSAGE_EPUISE = (
-    "Vos dix analyses ont été utilisées. Pour poursuivre la démonstration, "
+    "Toutes vos analyses ont été utilisées. Pour poursuivre la démonstration, "
     "écrivez-nous :"
 )
 

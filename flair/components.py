@@ -461,7 +461,7 @@ def portail_connexion() -> None:
     with ui.column().classes("panel portail w-full p-8 gap-5 fade-in"):
         ui.label("Accès à la démonstration").classes("portail-titre")
         ui.label(
-            "Créez votre accès avec votre adresse professionnelle et un mot de "
+            "Créez votre accès avec l'adresse e-mail de votre choix et un mot de "
             "passe. Vous recevrez un code par e-mail pour confirmer votre adresse, "
             "puis vous disposerez de dix analyses de documents. Pour revenir, il "
             "suffira de vous reconnecter avec la même adresse et le même mot de "
