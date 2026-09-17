@@ -198,24 +198,7 @@ body {
   border-radius:7px; padding:11px 14px; color:var(--accent); }
 .dedup-text { font-size:.79rem; line-height:1.55; color:var(--ink-2); }
 
-/* ---------- retour utilisateur ---------- */
-.feedback { border-left:5px solid var(--accent); }
-.feedback-title { font-family:'IBM Plex Serif',serif; font-weight:600; font-size:1.15rem; }
-.feedback-question { font-size:.9rem; font-weight:500; }
-.fb-btn { min-width:88px; border-radius:6px !important; font-size:.85rem !important; }
-.fb-btn-active { background:var(--accent) !important; color:#fff !important;
-  border-color:var(--accent) !important; }
-.fb-submit { background:var(--accent) !important; color:#fff !important;
-  border-radius:6px !important; font-size:.85rem !important; }
-.fbgroup { padding:10px 0 4px 0; border-top:1px dashed var(--line); }
-.fbgroup-title { font-family:'IBM Plex Mono',monospace; font-size:.66rem;
-  letter-spacing:.16em; text-transform:uppercase; color:var(--ink); font-weight:500; }
-.fbgroup-help { font-size:.74rem; color:var(--ink-2); margin-bottom:2px; }
-.fbcheck .q-checkbox__label { font-size:.83rem; line-height:1.45; }
-.fbtext .q-field__control { background:var(--card); font-size:.85rem; }
-.fberror { font-size:.8rem; color:var(--fraud); }
-
-/* zone de dépôt verrouillée tant que le retour n'est pas donné */
+/* zone de dépôt verrouillée quand les crédits sont épuisés */
 .dropzone-locked { opacity:.45; pointer-events:none; filter:grayscale(1); }
 .dropzone-notice { font-size:.78rem; color:var(--accent); text-align:center;
   padding-top:8px; }
@@ -323,6 +306,30 @@ HEAD = HEAD.replace("</style>", """
 .credits-solde { font-family:'IBM Plex Mono',monospace; font-size:.66rem;
   letter-spacing:.12em; text-transform:uppercase; color:var(--accent); }
 .credits-vide { color:var(--fraud); }
+
+/* ---------- téléphones ----------
+   Clerk impose une largeur minimale a sa carte : sans cela elle depasse du
+   cadre. La barre du haut, elle, ne tient pas sur 375 px avec ses trois
+   elements : le badge de l'API est purement decoratif, il s'efface. */
+@media (max-width:640px) {
+  .page { padding-left:14px !important; padding-right:14px !important;
+    padding-top:34px !important; gap:1.75rem !important; }
+  .topbar-inner { padding:12px 14px; }
+  .live-badge { display:none !important; }
+  .doc-btn { padding:7px 12px; font-size:.76rem; }
+  .hero-title { font-size:1.9rem; }
+  .hero-sub { font-size:.9rem; }
+  .portail { padding:22px !important; }
+  .portail-titre { font-size:1.25rem; }
+  .clerk-connexion, .cl-rootBox, .cl-cardBox, .cl-card {
+    width:100% !important; max-width:100% !important; min-width:0 !important; }
+  .credits { flex-wrap:wrap !important; border-radius:14px; row-gap:6px; }
+  .credits-email { word-break:break-all; }
+  .dropzone { padding:32px 16px; }
+  .verdict-word { font-size:1.7rem; }
+  .layer-head { padding:13px 14px; }
+  .layer-body { padding:14px; }
+}
 
 /* ---------- contact en pied de page ---------- */
 .contact-lien { color:var(--accent); text-decoration:none;

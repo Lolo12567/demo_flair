@@ -54,12 +54,6 @@ MESSAGE_EPUISE = (
     "écrivez-nous :"
 )
 
-# Le formulaire de retour s'affiche et s'enregistre toujours. Ce réglage décide
-# seulement s'il *bloque* le dépôt d'un nouveau document tant qu'on n'a pas
-# répondu. Désactivé pour les tests internes, à passer à 1 pour de vrais
-# utilisateurs — c'est ce qui garantit le taux de réponse.
-RETOUR_BLOQUANT = os.getenv("FLAIR_RETOUR_BLOQUANT", "0") == "1"
-
 # Squelettes affichés pendant l'attente de la réponse (mêmes noms que l'adapter).
 PENDING_LAYERS = [
     (1, "Historique & modifications", "Enregistrements successifs · différences de contenu"),
@@ -144,7 +138,7 @@ def main_page(request: Request):
         ui.add_head_html(identite.balises_script())
         ui.add_body_html(identite.script_page(connecte=visiteur is not None))
 
-    with ui.column().classes("w-full max-w-4xl mx-auto px-6 pt-14 pb-6 gap-10"):
+    with ui.column().classes("page w-full max-w-4xl mx-auto px-6 pt-14 pb-6 gap-10"):
 
         with ui.column().classes("gap-4"):
             ui.label("Moteur d'analyse — démonstration").classes("eyebrow")
@@ -204,22 +198,17 @@ def main_page(request: Request):
                     on_upload=lambda e: analyze(e),
                 ).props('accept=".pdf,image/*" flat')
 
-        # Message sous la zone de dépôt quand elle est bloquée. Le lien de
-        # contact n'apparaît que lorsque les crédits sont épuisés.
+        # Message affiché sous la zone de dépôt une fois les crédits épuisés.
         with ui.row().classes(
             "dropzone-notice w-full justify-center items-center gap-1"
         ) as notice:
-            notice_texte = ui.label(
-                "Donnez votre avis sur le verdict ci-dessous pour analyser un autre document."
-            )
-            notice_contact = lien_contact()
-        notice_contact.set_visibility(False)
+            ui.label(MESSAGE_EPUISE)
+            lien_contact()
         notice.set_visibility(False)
 
         doc_slot = ui.column().classes("w-full")
         verdict_slot = ui.column().classes("w-full")
         layers_slot = ui.column().classes("w-full gap-3")
-        feedback_slot = ui.column().classes("w-full")
         raw_slot = ui.column().classes("w-full")
 
         pied_de_page()
@@ -228,21 +217,11 @@ def main_page(request: Request):
         # Orchestration
         # ------------------------------------------------------------------
 
-        def verrouiller(actif: bool, message: str | None = None,
-                        contact: bool = False) -> None:
-            """Bloque la zone de dépôt (retour attendu, ou crédits épuisés)."""
-            upload.set_enabled(not actif)
-            if message:
-                notice_texte.text = message
-            notice_contact.set_visibility(contact)
-            notice.set_visibility(actif)
-            if actif:
-                zone.classes(add="dropzone-locked")
-            else:
-                zone.classes(remove="dropzone-locked")
-
         def epuiser() -> None:
-            verrouiller(True, MESSAGE_EPUISE, contact=True)
+            """Ferme la zone de dépôt : il ne reste plus d'analyse disponible."""
+            upload.set_enabled(False)
+            notice.set_visibility(True)
+            zone.classes(add="dropzone-locked")
 
         def show_error(message: str, contact: bool = False) -> None:
             layers_slot.clear()
@@ -276,7 +255,7 @@ def main_page(request: Request):
             size_kb = len(content) / 1024
             upload.reset()
 
-            for slot in (doc_slot, verdict_slot, layers_slot, feedback_slot, raw_slot):
+            for slot in (doc_slot, verdict_slot, layers_slot, raw_slot):
                 slot.clear()
 
             # Le contrôle des crédits se refait ici : la page a pu rester
@@ -332,7 +311,7 @@ def main_page(request: Request):
                 return
 
             # L'analyse a abouti : elle est journalisée et décomptée.
-            analyse_id = feedback.enregistrer_analyse(
+            feedback.enregistrer_analyse(
                 identifiant=identifiant,
                 email=email,
                 nom_document=filename,
@@ -352,21 +331,8 @@ def main_page(request: Request):
                 with layers_slot:
                     fc.layer_block(layer, open_=layer.alert_count > 0)
 
-            reste = comptes.peut_analyser(identifiant)
-            verrouiller(
-                RETOUR_BLOQUANT,
-                "Donnez votre avis sur le verdict ci-dessous pour analyser "
-                "un autre document.",
-            )
-            if not reste:
+            if not comptes.peut_analyser(identifiant):
                 epuiser()
-
-            with feedback_slot:
-                fc.feedback_form(
-                    analyse_id=analyse_id,
-                    on_submit=lambda: (epuiser() if not comptes.peut_analyser(identifiant)
-                                       else verrouiller(False)),
-                )
 
             with raw_slot:
                 bloc_json(raw)

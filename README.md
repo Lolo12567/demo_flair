@@ -165,7 +165,6 @@ Ouvre ton navigateur et va sur :
 | `FLAIR_API_KEY` | *(vide)* | **⚠️ OBLIGATOIRE** — Ta clé d'accès à l'API |
 | `PORT` | `8080` | Port du serveur web |
 | `FLAIR_RELOAD` | `0` | Mets `1` en développement : la page se recharge toute seule à chaque modification du code |
-| `FLAIR_RETOUR_BLOQUANT` | `0` | Mets `1` pour exiger le questionnaire avant un nouveau dépôt |
 
 ### Connexion (Clerk), crédits et base de données
 
@@ -194,8 +193,8 @@ personne n'obtient leurs droits en tapant simplement leur adresse.
 Deux tables sont créées automatiquement au démarrage :
 `utilisateurs` (identifiant Clerk, adresse, crédits consommés) et
 `retours` (une ligne par document analysé : date, identifiant Clerk, adresse,
-nom du document, type, verdict, puis l'avis de la personne si elle répond au
-questionnaire). L'ancienne table `comptes` n'est plus alimentée : elle n'est
+nom du document, type, verdict). L'ancienne table `comptes` n'est plus
+alimentée : elle n'est
 lue qu'une fois, pour reprendre le compteur d'un visiteur qui se reconnecte
 avec la même adresse.
 

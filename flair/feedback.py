@@ -1,65 +1,18 @@
-"""Journal des analyses et retour utilisateur sur le verdict.
+"""Journal des analyses.
 
 Une ligne est ecrite des le depot d'un document : qui (identifiant Clerk et
-adresse), quoi, quel verdict. Elle est completee ensuite si la personne repond
-au questionnaire. Une analyse sans retour reste donc visible, avec `satisfait`
-vide.
+adresse), quoi, quel verdict.
+
+Les colonnes `satisfait`, `motifs` et `justification` datent du questionnaire
+de fin d'analyse, retire depuis. Elles restent en base pour ne pas perdre les
+reponses deja collectees, mais plus rien ne les alimente.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from .base import MARQUEUR, colonne_si_absente, curseur, moteur, utilise_postgres
-
-
-@dataclass(frozen=True)
-class Motif:
-    code: str  # stocke en base, agregeable
-    label: str  # affiche a l'utilisateur
-
-
-@dataclass(frozen=True)
-class GroupeMotifs:
-    titre: str
-    aide: str
-    motifs: tuple[Motif, ...]
-
-
-# Catalogue des cases a cocher, organise par nature d'erreur.
-GROUPES: tuple[GroupeMotifs, ...] = (
-    GroupeMotifs(
-        titre="Un document frauduleux est passé",
-        aide="Le moteur n'a pas vu quelque chose.",
-        motifs=(
-            Motif("fn_retouche", "Le document a été retouché (montant, date ou nom modifié)"),
-            Motif("fn_fabrique", "Le document est entièrement fabriqué ou généré par l'IA"),
-            Motif("fn_ia_partielle", "Le document est partiellement modifié par l'IA"),
-            Motif("fn_incoherence", "Les données du document se contredisent"),
-            Motif("fn_emetteur", "Le document ne correspond pas à l'émetteur qu'il prétend"),
-        ),
-    ),
-    GroupeMotifs(
-        titre="Un document authentique a été signalé à tort",
-        aide="Le moteur a vu quelque chose qui n'en est pas.",
-        motifs=(
-            Motif("fp_logiciel", "Le logiciel signalé est légitime pour ce type de document"),
-            Motif("fp_metadonnees", "L'absence de métadonnées est normale ici (scan, messagerie)"),
-            Motif("fp_modifs", "Les modifications signalées sont anodines (signature, annotation)"),
-        ),
-    ),
-    GroupeMotifs(
-        titre="Le niveau de risque est mal calibré",
-        aide="Le constat est bon, le niveau ne l'est pas.",
-        motifs=(
-            Motif("cal_trop_severe", "Trop sévère"),
-            Motif("cal_pas_assez", "Pas assez sévère"),
-        ),
-    ),
-)
-
-TOUS_LES_MOTIFS = {m.code: m.label for g in GROUPES for m in g.motifs}
 
 
 def type_de_document(filename: str) -> str:
@@ -141,13 +94,12 @@ def enregistrer_analyse(identifiant: str, email: str, nom_document: str,
         str(nom_document or ""),
         type_de_document(nom_document),
         str(verdict or ""),
-        "",
     )
     try:
         with curseur() as c:
             colonnes = ("cree_le, clerk_id, email, nom_document, type_document,"
-                        " verdict, satisfait")
-            valeurs = ", ".join([MARQUEUR] * 7)
+                        " verdict")
+            valeurs = ", ".join([MARQUEUR] * 6)
             if utilise_postgres():
                 c.execute(f"INSERT INTO retours ({colonnes}) VALUES ({valeurs})"
                           " RETURNING id", ligne)
@@ -158,21 +110,3 @@ def enregistrer_analyse(identifiant: str, email: str, nom_document: str,
     except Exception as erreur:
         print(f"[flair] analyse non enregistrée : {erreur}")
         return None
-
-
-def enregistrer_retour(identifiant: int | None, satisfait: bool,
-                       motifs: list[str], justification: str) -> None:
-    """Complete la ligne de l'analyse avec l'avis de la personne."""
-    if identifiant is None:
-        return
-    try:
-        with curseur() as c:
-            c.execute(
-                f"UPDATE retours SET satisfait = {MARQUEUR}, motifs = {MARQUEUR},"
-                f" justification = {MARQUEUR} WHERE id = {MARQUEUR}",
-                ("oui" if satisfait else "non",
-                 ",".join(motifs) if motifs else "",
-                 (justification or "").strip(),
-                 identifiant))
-    except Exception as erreur:
-        print(f"[flair] retour non enregistré : {erreur}")
