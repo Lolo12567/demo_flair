@@ -13,10 +13,11 @@ import base64
 import json
 import os
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from clerk_backend_api import Clerk
-from clerk_backend_api.security import authenticate_request
-from clerk_backend_api.security.types import AuthenticateRequestOptions
+from clerk_backend_api.security.types import TokenVerificationError, VerifyTokenOptions
+from clerk_backend_api.security.verifytoken import verify_token
 
 CLE_PUBLIQUE = (os.getenv("CLERK_PUBLISHABLE_KEY")
                 or os.getenv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "")).strip()
@@ -94,23 +95,91 @@ def adresse_verifiee(identifiant: str) -> str:
     return adresse
 
 
+# --------------------------------------------------------------------------
+# Lecture du jeton de session
+# --------------------------------------------------------------------------
+#
+# On ne passe pas par `authenticate_request` du SDK : il lit les cookies avec
+# SimpleCookie et ne garde que le premier `__session*` trouve. Deux defauts
+# observes en pratique :
+#   - un seul cookie au format inattendu (valeur JSON, virgule…) pose par un
+#     autre site du domaine fait abandonner TOUT l'en-tete : aucune session lue ;
+#   - un ancien cookie de l'instance Clerk de developpement, reste dans le
+#     navigateur des premiers testeurs, est lu a la place du bon, et rejete.
+# Ici, chaque cookie `__session*` est examine, et le premier valable l'emporte.
+
+
+def _contenu(jeton: str) -> dict:
+    """Contenu d'un JWT, lu SANS verifier la signature : ne sert qu'au tri."""
+    try:
+        partie = jeton.split(".")[1]
+        partie += "=" * (-len(partie) % 4)
+        return json.loads(base64.urlsafe_b64decode(partie))
+    except Exception:
+        return {}
+
+
+def jetons_candidats(entete_cookie: str, entete_auth: str = "") -> list[tuple[str, str]]:
+    """Tous les jetons de session de la requete, dans l'ordre recu, doublons compris."""
+    jetons: list[tuple[str, str]] = []
+    if entete_auth.startswith("Bearer "):
+        jetons.append(("Authorization", entete_auth[7:].strip()))
+    for morceau in (entete_cookie or "").split(";"):
+        nom, signe, valeur = morceau.strip().partition("=")
+        valeur = valeur.strip().strip('"')
+        if signe and nom.startswith("__session") and valeur.count(".") == 2:
+            jetons.append((nom, valeur))
+    return jetons
+
+
+def emis_par_cette_instance(jeton: str) -> bool:
+    """Ecarte d'emblee, sans appel reseau, un jeton emis par une autre instance."""
+    emetteur = str(_contenu(jeton).get("iss") or "")
+    return not emetteur or urlparse(emetteur).hostname == HOTE
+
+
+def _verifier(jeton: str) -> dict:
+    """Signature, expiration et origine (`azp`) verifiees par le SDK Clerk."""
+    return verify_token(jeton, VerifyTokenOptions(
+        secret_key=CLE_SECRETE, authorized_parties=[BASE_URL]))
+
+
 def visiteur(request) -> Visiteur | None:
     """Le visiteur connecte, ou None si la requete ne porte aucune session valide."""
     if not est_configure():
         return None
-    try:
-        etat = authenticate_request(request, AuthenticateRequestOptions(
-            secret_key=CLE_SECRETE, authorized_parties=[BASE_URL]))
-    except Exception as erreur:
-        print(f"[flair] vérification de session impossible : {erreur}")
-        return None
-    if not etat.is_signed_in or not etat.payload:
-        return None
-    identifiant = etat.payload.get("sub")
-    if not identifiant:
-        return None
-    return Visiteur(identifiant=identifiant, email=adresse_verifiee(identifiant))
+    candidats = jetons_candidats(request.headers.get("cookie", ""),
+                                 request.headers.get("authorization", ""))
+    refus: list[str] = []
+    for nom, jeton in candidats:
+        if not emis_par_cette_instance(jeton):
+            refus.append(f"{nom} : autre instance Clerk")
+            continue
+        try:
+            charge = _verifier(jeton)
+        except TokenVerificationError as erreur:
+            refus.append(f"{nom} : {erreur.reason.name}")
+            continue
+        except Exception as erreur:
+            refus.append(f"{nom} : {type(erreur).__name__}")
+            continue
+        identifiant = charge.get("sub")
+        if identifiant:
+            return Visiteur(identifiant=identifiant,
+                            email=adresse_verifiee(identifiant))
 
+    # Un jeton expire est le cas normal d'un retour apres plus d'une minute : le
+    # navigateur le renouvelle et recharge. Les autres refus meritent d'etre vus
+    # dans les journaux, sans jamais y ecrire le jeton lui-meme.
+    anormaux = [r for r in refus if not r.endswith("TOKEN_EXPIRED")]
+    if anormaux:
+        print(f"[flair] session refusée — {' | '.join(anormaux)}")
+    return None
+
+
+# --------------------------------------------------------------------------
+# Cote navigateur
+# --------------------------------------------------------------------------
 
 def balises_script() -> str:
     """Chargement de Clerk par balises <script>, comme le prevoit sa documentation."""
@@ -128,7 +197,10 @@ _SCRIPT = """
 (function () {
   const CONNECTE = __CONNECTE__;
   const RETOUR = __RETOUR__;
-  const GARDE = "flair-clerk-rechargement";
+  const HOTE = __HOTE__;
+  const GARDE = "flair-clerk-reprise";
+  const ESSAIS_MAX = 2;
+  let repriseEnCours = false;
 
   function attendre(selecteur) {
     return new Promise(function (resoudre) {
@@ -139,18 +211,50 @@ _SCRIPT = """
     });
   }
 
-  // Recharge la page pour que le serveur relise un cookie __session neuf.
-  // Garde-fou : jamais deux fois en moins de 15 secondes, donc pas de boucle.
-  function recharger() {
-    let dernier = 0;
-    try { dernier = Number(sessionStorage.getItem(GARDE) || 0); } catch (e) {}
-    if (Date.now() - dernier < 15000) return false;
-    try { sessionStorage.setItem(GARDE, String(Date.now())); } catch (e) {}
+  function pause(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+  function essais() {
+    try { return Number(sessionStorage.getItem(GARDE) || 0); } catch (e) { return 0; }
+  }
+  function noterEssais(n) {
+    try { sessionStorage.setItem(GARDE, String(n)); } catch (e) {}
+  }
+
+  // Le cookie __session contient-il un jeton de CETTE instance, encore
+  // valable ? Les anciens cookies de l'instance de developpement sont ignores.
+  function jetonPret() {
+    const maintenant = Date.now() / 1000;
+    return document.cookie.split(";").some(function (c) {
+      const i = c.indexOf("=");
+      const nom = c.slice(0, i).trim();
+      const valeur = c.slice(i + 1).trim();
+      if (!nom.startsWith("__session") || valeur.split(".").length !== 3) return false;
+      try {
+        const p = JSON.parse(atob(valeur.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+        return p.exp > maintenant + 5 && (!p.iss || new URL(p.iss).hostname === HOTE);
+      } catch (e) { return false; }
+    });
+  }
+
+  // Le navigateur a une session que le serveur n'a pas vue (jeton expire entre
+  // deux visites, ou cookie pas encore ecrit juste apres la connexion). On
+  // force un jeton neuf, on ATTEND que clerk-js l'ait ecrit dans le cookie,
+  // puis seulement on recharge. Renvoie false apres deux essais infructueux.
+  async function reprendreSession() {
+    if (repriseEnCours) return true;
+    const n = essais();
+    if (n >= ESSAIS_MAX) return false;
+    repriseEnCours = true;
+    noterEssais(n + 1);
+    try { await window.Clerk.session.getToken({ skipCache: true }); } catch (e) {}
+    const limite = Date.now() + 5000;
+    while (!jetonPret() && Date.now() < limite) await pause(100);
     window.location.replace(RETOUR);
     return true;
   }
 
   window.flairDeconnexion = async function () {
+    noterEssais(0);
     try { await window.Clerk.signOut(); } catch (e) {}
     window.location.replace(RETOUR);
   };
@@ -195,25 +299,32 @@ _SCRIPT = """
       ui: { ClerkUI: ClerkUI },
       localization: traduction,
     });
-    if (CONNECTE) return;
+    if (CONNECTE) {
+      noterEssais(0);
+      return;
+    }
 
     const etat = await attendre(".clerk-etat");
     if (window.Clerk.isSignedIn) {
-      // Le navigateur a une session que le serveur n'a pas vue (jeton expire
-      // entre deux visites) : Clerk vient de le renouveler, on recharge.
-      etat.textContent = recharger()
-        ? "Reprise de votre session…"
-        : "Session ouverte, mais refusée par le serveur. Vérifiez FLAIR_BASE_URL.";
-      return;
+      etat.textContent = "Reprise de votre session…";
+      if (await reprendreSession()) return;
+      // Le serveur refuse encore cette session apres deux jetons neufs : plutot
+      // que de laisser le visiteur bloque, on la ferme et on repropose la
+      // connexion. La cause exacte est ecrite dans les journaux du serveur.
+      console.warn("[flair] session refusée par le serveur, reconnexion proposée");
+      noterEssais(0);
+      try { await window.Clerk.signOut(); } catch (e) {}
+      etat.textContent = "Votre session a expiré. Merci de vous reconnecter.";
+    } else {
+      etat.style.display = "none";
     }
-    etat.style.display = "none";
     window.Clerk.mountSignIn(await attendre(".clerk-connexion"), {
       withSignUp: true,
       forceRedirectUrl: RETOUR,
       signUpForceRedirectUrl: RETOUR,
     });
     window.Clerk.addListener(function (emission) {
-      if (emission.user) recharger();
+      if (emission.user) reprendreSession();
     }, { skipInitialEmit: true });
   });
 })();
@@ -226,4 +337,5 @@ def script_page(connecte: bool) -> str:
     return (_SCRIPT
             .replace("__CONNECTE__", json.dumps(connecte))
             .replace("__RETOUR__", json.dumps(BASE_URL + "/"))
+            .replace("__HOTE__", json.dumps(HOTE))
             .replace("__TRADUCTION__", json.dumps(TRADUCTION)))
